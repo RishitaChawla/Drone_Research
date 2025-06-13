@@ -5,6 +5,11 @@ import math
 from mrs_msgs.srv import PathSrv, PathSrvRequest
 from mrs_msgs.srv import Vec1, Vec1Response
 from mrs_msgs.msg import Reference
+from std_msgs.msg import Bool
+
+import cv2 # OpenCV library for computer vision
+from cv_bridge import CvBridge, CvBridgeError # Converts ROS Image messages and OpenCV format
+from sensor_msgs.msg import Image # ROS Message type for camera data
 
 
 class MultiUAVCoordination:
@@ -28,30 +33,66 @@ class MultiUAVCoordination:
         self.dimensions_y = rospy.get_param("~dimensions/y")
         self.trajectory_type = rospy.get_param("~trajectory_type", "sweep")
 
+
+        
+        # Disc detection parameters
+        self.detection_threshold = rospy.get_param("~detection_threshold", 3)  # Number of consecutive detections needed
+        self.hit_distance_threshold = rospy.get_param("~hit_distance_threshold", 1.0)
+        self.hit_image_threshold = rospy.get_param("~hit_image_threshold", 0.6)
+
         
 
         self.is_initialized = False # tells the code whether the setup is done or not, AM I ready to work or not
+        
         # Log that we're starting
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized')
-        #print(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized')
+        
          ## | --------------------- service clients -------------------- |
-        self.sc_path = rospy.ServiceProxy('~path_out', PathSrv)
+        self.sc_path = rospy.ServiceProxy('~path_out', PathSrv) # Request to Server
         
         ## | --------------------- service servers -------------------- |
-        self.ss_start = rospy.Service('~start_in', Vec1, self.callbackStart)
+        self.ss_start = rospy.Service('~start_in', Vec1, self.callbackStart) # Trigger to start the circular trajectory
 
+        ## | -----------------------Subscribers -------------------------|
+
+        # Camera feed for disc detection
+        self.sub_camera = rospy.Subscriber(
+            "/"+self.uav_name+"/rgbd/color/image_raw",    # Topic name
+            Image,                                        # Message type
+            self.callbackCamera                          # Function to call
+        )
+
+
+        # Publisher for disc detection notifications
+        self.pub_disc_detection = rospy.Publisher(
+            "/"+self.uav_name+"/disc_detection", 
+            Bool, 
+            queue_size=10
+        )       
+
+        # Publisher for visualization
+        self.pub_visualization = rospy.Publisher(
+            "~visualization_out",
+            Image,
+            queue_size=10   
+        )       
 
        
 
         self.is_initialized = True
         rospy.loginfo(f'[MultiUAVCoordination and Sweeping Generator-{self.uav_name}]: Ready and waiting...')
 
-
+        # ------------------ state variables ---------------------------------------
+        self.disc_detected = False        # Have we confirmed seeing a disc?
+        self.detection_count = 0          # How many times have we seen it consecutively?
+        self.bridge = CvBridge()          # Tool to convert ROS images to OpenCV
+        self.target_position = None       # Where was the disc when we found it?
+        self.disc_detector_uav = None  # Which UAV detected the disc
 
         # Keep the Node Running
         rospy.spin()
 
-    # -----------------------End of COnstructor-------------------------------------------------------------------
+    # -----------------------End of Constructor-------------------------------------------------------------------
 
     def planCircleTrajectory(self,radius_factor = 1.0):
         path_msg = PathSrvRequest()
@@ -75,6 +116,52 @@ class MultiUAVCoordination:
             path_msg.path.points.append(point)
         
         return path_msg
+    
+
+    def detectDisc(self, image):
+        """
+        Detect gray disc in the image using HSV color space
+        Returns: (found, x, y, width, height)
+        """
+        # Convert the frame to HSV color space
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        
+        # Define the range for gray color detection in HSV space
+        lower_gray = np.array([0, 0, 50])  # Lower bound (dark gray)
+        upper_gray = np.array([180, 50, 200])  # Upper bound (light gray)
+        
+        # Create a mask to detect gray regions
+        mask = cv2.inRange(hsv, lower_gray, upper_gray)
+        
+        # Perform morphological operations to remove noise and enhance the mask
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Find contours in the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Process contours to find suitable gray objects
+        for contour in contours:
+            # Calculate the bounding box and area
+            x, y, w, h = cv2.boundingRect(contour)
+            area = w * h
+            
+            # Filter based on minimum area
+            if area > 500:  # Minimum area threshold (adjust as needed)
+                # Log detection
+                rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: Potential disc detected at ({x}, {y}) with size {w}x{h}")
+                return True, x, y, w, h
+                
+        # No disc found
+        return False, 0, 0, 0, 0
+    
+    def broadcastDiscDetection(self):
+        """Broadcast disc detection to other UAVs"""
+        msg = Bool()
+        msg.data = True
+        self.pub_disc_detection.publish(msg)
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Broadcasting disc detection!')
+
 
     # ------------------------------callbacks-------------------------------------------
 
@@ -93,11 +180,59 @@ class MultiUAVCoordination:
             return Vec1Response(response.success, response.message)
         except Exception as e:
             return Vec1Response(False, "service call failed")
-       
+
+    def callbackCamera(self, data):
+        """Process camera frames to detect discs"""
+        # Skip processing if we've already detected a disc
+        # or if we're responding to another UAV's detection
+        if self.disc_detected or self.disc_detector_uav is not None:
+            return
+            
+        try:
+            # Convert ROS Image message to OpenCV image
+            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            
+            # Detect disc
+            found, x, y, w, h = self.detectDisc(cv_image)
+            
+            # Draw detection visualization
+            if found:
+                # Visualize the detection with rectangle
+                cv2.rectangle(cv_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.circle(cv_image, (x + w//2, y + h//2), 5, (0, 0, 255), -1)
+                cv2.putText(cv_image, f"Disc ({x}, {y})", (x, y - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Count consecutive detections
+                self.detection_count += 1
+                
+                # Confirm detection after threshold
+                if self.detection_count >= self.detection_threshold and not self.disc_detected:
+                    self.disc_detected = True
+                    self.disc_detector_uav = self.uav_name  # Mark self as the detector
+                    rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Disc detected!')
+                    self.broadcastDiscDetection()
+            else:
+                # Reset detection counter if no disc is found
+                self.detection_count = 0
+            
+            # Add status text
+            status = "DISC DETECTED" if self.disc_detected else "SEARCHING"
+            if self.disc_detector_uav and self.disc_detector_uav != self.uav_name:
+                status = f"FORMATION WITH {self.disc_detector_uav}"
+                
+            cv2.putText(cv_image, f"UAV: {self.uav_name} - {status}", (10, 30),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Publish visualization
+            viz_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
+            self.pub_visualization.publish(viz_msg)
+            
+        except CvBridgeError as e:
+            rospy.logerr(f"[SweepingGenerator-{self.uav_name}]: {e}")
+
+
         
-    
-
-
 if __name__ == '__main__': # only run this if someone directly runs this file
     try:
         node = MultiUAVCoordination()   # creates and starts the node of drone

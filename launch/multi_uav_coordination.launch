@@ -4,54 +4,76 @@
   <group ns="uav1">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
       <!-- Basic required parameters -->
-      <param name="frame_id" value="gps_origin" />
+      <param name="frame_id" value="world_origin" />
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
       <param name="center/z" value="3.0" />
-      <param name="dimensions/x" value="10.0" />  <!-- Circle diameter -->
+      <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
-      <param name="frame_id" value="world_origin" />
+      
+      <!-- ADD THESE DETECTION PARAMETERS -->
+      <param name="detection_threshold" value="3" />
+      <param name="hit_distance_threshold" value="1.0" />
+      <param name="hit_image_threshold" value="0.6" />
+      <param name="timer_main/rate" value="1.0" />
       
       <!-- Service remappings -->
       <remap from="~control_manager_diag_in" to="/uav1/control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
+      
+      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
   
   <!-- UAV2 - Same setup -->
   <group ns="uav2">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
-      <!-- ADD SAME PARAMETERS -->
+      <param name="frame_id" value="world_origin" />
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="5.0" />  <!-- Different altitude -->
+      <param name="center/z" value="5.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
-      <param name="frame_id" value="world_origin" />
       
+      <!-- ADD THESE DETECTION PARAMETERS -->
+      <param name="detection_threshold" value="3" />
+      <param name="hit_distance_threshold" value="1.0" />
+      <param name="hit_image_threshold" value="0.6" />
+      <param name="timer_main/rate" value="1.0" />
       
       <remap from="~control_manager_diag_in" to="/uav2/control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
+      
+      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
   
   <!-- UAV3 - Same setup -->
   <group ns="uav3">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
-      <!-- ADD SAME PARAMETERS -->
+      <param name="frame_id" value="world_origin" />
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="7.0" />  <!-- Different altitude -->
+      <param name="center/z" value="7.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
-      <param name="frame_id" value="world_origin" />
-     
+      
+      <!-- ADD THESE DETECTION PARAMETERS -->
+      <param name="detection_threshold" value="3" />
+      <param name="hit_distance_threshold" value="1.0" />
+      <param name="hit_image_threshold" value="0.6" />
+      <param name="timer_main/rate" value="1.0" />
       
       <remap from="~control_manager_diag_in" to="/uav3/control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
+      
+      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
 </launch>
