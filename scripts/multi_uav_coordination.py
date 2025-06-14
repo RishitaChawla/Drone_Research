@@ -120,41 +120,47 @@ class MultiUAVCoordination:
 
     def detectDisc(self, image):
         """
-        Detect gray disc in the image using HSV color space
-        Returns: (found, x, y, width, height)
+        Detect gray disc with shape and size filtering to avoid detecting drones
         """
-        # Convert the frame to HSV color space
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         
-        # Define the range for gray color detection in HSV space
-        lower_gray = np.array([0, 0, 50])  # Lower bound (dark gray)
-        upper_gray = np.array([180, 50, 200])  # Upper bound (light gray)
-        
-        # Create a mask to detect gray regions
+        # Color detection
+        lower_gray = np.array([0, 0, 50])
+        upper_gray = np.array([180, 50, 200])
         mask = cv2.inRange(hsv, lower_gray, upper_gray)
         
-        # Perform morphological operations to remove noise and enhance the mask
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
-        # Find contours in the mask
+        # Use underscore to indicate "I don't need this variable"
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Process contours to find suitable gray objects
         for contour in contours:
-            # Calculate the bounding box and area
             x, y, w, h = cv2.boundingRect(contour)
             area = w * h
+            contour_area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
             
-            # Filter based on minimum area
-            if area > 500:  # Minimum area threshold (adjust as needed)
-                # Log detection
-                rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: Potential disc detected at ({x}, {y}) with size {w}x{h}")
-                return True, x, y, w, h
+            # Size filtering (adjust these values based on your disc size)
+            if not (800 < area < 4000):
+                continue
                 
-        # No disc found
+            # Shape filtering
+            if perimeter > 0:
+                circularity = 4 * np.pi * contour_area / (perimeter * perimeter)
+                aspect_ratio = float(w) / h
+                
+                # Disc should be circular and round
+                if (circularity > 0.6 and 0.7 < aspect_ratio < 1.4):
+                    rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: "
+                                f"Valid disc - Area: {area}, Circularity: {circularity:.2f}")
+                    return True, x, y, w, h
+                else:
+                    rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: "
+                                f"Shape rejected - Circularity: {circularity:.2f}, "
+                                f"Aspect: {aspect_ratio:.2f}")
+        
         return False, 0, 0, 0, 0
-    
     def broadcastDiscDetection(self):
         """Broadcast disc detection to other UAVs"""
         msg = Bool()
@@ -189,6 +195,7 @@ class MultiUAVCoordination:
             return
             
         try:
+            
             # Convert ROS Image message to OpenCV image
             cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
             
@@ -241,4 +248,3 @@ if __name__ == '__main__': # only run this if someone directly runs this file
 
 
         
-

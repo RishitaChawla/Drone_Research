@@ -8,7 +8,7 @@
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="3.0" />
+      <param name="center/z" value="10.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
       
@@ -34,7 +34,7 @@
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="5.0" />
+      <param name="center/z" value="9.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
       
@@ -59,7 +59,7 @@
       <param name="trajectory_type" value="circle" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="7.0" />
+      <param name="center/z" value="8.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
       
