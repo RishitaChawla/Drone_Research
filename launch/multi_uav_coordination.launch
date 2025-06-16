@@ -5,12 +5,15 @@
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
       <!-- Basic required parameters -->
       <param name="frame_id" value="world_origin" />
-      <param name="trajectory_type" value="circle" />
+      <param name="trajectory_type" value="random" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="10.0" />
+      <param name="center/z" value="9.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
+
+      <param name="initial_position/x" value="x1_value"/>
+      <param name="initial_position/y" value="y1_value"/>
       
       <!-- ADD THESE DETECTION PARAMETERS -->
       <param name="detection_threshold" value="3" />
@@ -31,12 +34,16 @@
   <group ns="uav2">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
       <param name="frame_id" value="world_origin" />
-      <param name="trajectory_type" value="circle" />
+      <param name="trajectory_type" value="random" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="9.0" />
+      <param name="center/z" value="8.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
+
+      <!-- For UAV2 -->
+    <param name="initial_position/x" value="x2_value"/>
+    <param name="initial_position/y" value="y2_value"/>
       
       <!-- ADD THESE DETECTION PARAMETERS -->
       <param name="detection_threshold" value="3" />
@@ -56,12 +63,15 @@
   <group ns="uav3">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
       <param name="frame_id" value="world_origin" />
-      <param name="trajectory_type" value="circle" />
+      <param name="trajectory_type" value="random" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="8.0" />
+      <param name="center/z" value="7.0" />
       <param name="dimensions/x" value="10.0" />
       <param name="dimensions/y" value="10.0" />
+
+      <param name="initial_position/x" value="x3_value"/>
+      <param name="initial_position/y" value="y3_value"/>
       
       <!-- ADD THESE DETECTION PARAMETERS -->
       <param name="detection_threshold" value="3" />

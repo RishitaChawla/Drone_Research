@@ -2,27 +2,20 @@
 import rospy
 import numpy as np
 import math
+import random
 from mrs_msgs.srv import PathSrv, PathSrvRequest
 from mrs_msgs.srv import Vec1, Vec1Response
 from mrs_msgs.msg import Reference
 from std_msgs.msg import Bool
-
 import cv2 # OpenCV library for computer vision
 from cv_bridge import CvBridge, CvBridgeError # Converts ROS Image messages and OpenCV format
 from sensor_msgs.msg import Image # ROS Message type for camera data
 
-
 class MultiUAVCoordination:
     def __init__(self):
-
-
         rospy.init_node("multi_uav_coordination", anonymous = True)
-
-
-
         self.uav_name = rospy.get_namespace().strip('/')
-        #self.uav_ids = ["uav1", "uav2", "uav3"]
-
+        
         ## | --------------------- load parameters -------------------- |
         # Original trajectory parameters
         self.frame_id = rospy.get_param("~frame_id")
@@ -31,81 +24,272 @@ class MultiUAVCoordination:
         self.center_z = rospy.get_param("~center/z")
         self.dimensions_x = rospy.get_param("~dimensions/x")
         self.dimensions_y = rospy.get_param("~dimensions/y")
-        self.trajectory_type = rospy.get_param("~trajectory_type", "sweep")
-
-
+        self.trajectory_type = rospy.get_param("~trajectory_type", "random")
         
         # Disc detection parameters
-        self.detection_threshold = rospy.get_param("~detection_threshold", 3)  # Number of consecutive detections needed
+        self.detection_threshold = rospy.get_param("~detection_threshold", 3)
         self.hit_distance_threshold = rospy.get_param("~hit_distance_threshold", 1.0)
         self.hit_image_threshold = rospy.get_param("~hit_image_threshold", 0.6)
-
         
-
-        self.is_initialized = False # tells the code whether the setup is done or not, AM I ready to work or not
+        # Random trajectory parameters - Use full world space by default
+        self.search_area_min_x = rospy.get_param("~search_area/min_x", -20.0)  # Use most of the world space
+        self.search_area_max_x = rospy.get_param("~search_area/max_x", 20.0)   # Leave safety margin
+        self.search_area_min_y = rospy.get_param("~search_area/min_y", -20.0)  
+        self.search_area_max_y = rospy.get_param("~search_area/max_y", 20.0)
+        self.min_point_distance = rospy.get_param("~min_point_distance", 25.0)  # Large step size for wide coverage
+        self.num_trajectory_points = rospy.get_param("~num_trajectory_points", 12)  # Fewer points, widely spaced
+        self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)  # Use pure random for maximum spread
+        
+        # UAV altitude assignment
+        self.altitude_map = {
+            "uav1": 6.0,
+            "uav2": 7.0,
+            "uav3": 8.0
+        }
+        self.start_altitude = 3.0
+        self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)
+        
+        self.is_initialized = False
+        
+        # Random trajectory state
+        self.visited_points = []  # Store all visited (x,y) coordinates
+        self.current_trajectory_active = False
+        self.grid_sectors = []  # Track which grid sectors have been visited
+        self.initialize_grid_sectors()
         
         # Log that we're starting
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized at altitude {self.assigned_altitude}m')
         
          ## | --------------------- service clients -------------------- |
-        self.sc_path = rospy.ServiceProxy('~path_out', PathSrv) # Request to Server
+        self.sc_path = rospy.ServiceProxy('~path_out', PathSrv)
         
         ## | --------------------- service servers -------------------- |
-        self.ss_start = rospy.Service('~start_in', Vec1, self.callbackStart) # Trigger to start the circular trajectory
-
+        self.ss_start = rospy.Service('~start_in', Vec1, self.callbackStart)
+        
         ## | -----------------------Subscribers -------------------------|
-
         # Camera feed for disc detection
         self.sub_camera = rospy.Subscriber(
-            "/"+self.uav_name+"/rgbd/color/image_raw",    # Topic name
-            Image,                                        # Message type
-            self.callbackCamera                          # Function to call
+            "/"+self.uav_name+"/rgbd/color/image_raw",
+            Image,
+            self.callbackCamera
         )
-
-
+        
         # Publisher for disc detection notifications
         self.pub_disc_detection = rospy.Publisher(
             "/"+self.uav_name+"/disc_detection", 
             Bool, 
             queue_size=10
         )       
-
+        
         # Publisher for visualization
         self.pub_visualization = rospy.Publisher(
             "~visualization_out",
             Image,
             queue_size=10   
         )       
-
        
-
         self.is_initialized = True
-        rospy.loginfo(f'[MultiUAVCoordination and Sweeping Generator-{self.uav_name}]: Ready and waiting...')
-
+        rospy.loginfo(f'[MultiUAVCoordination and Random Trajectory Generator-{self.uav_name}]: Ready and waiting...')
+        
         # ------------------ state variables ---------------------------------------
-        self.disc_detected = False        # Have we confirmed seeing a disc?
-        self.detection_count = 0          # How many times have we seen it consecutively?
-        self.bridge = CvBridge()          # Tool to convert ROS images to OpenCV
-        self.target_position = None       # Where was the disc when we found it?
-        self.disc_detector_uav = None  # Which UAV detected the disc
-
+        self.disc_detected = False
+        self.detection_count = 0
+        self.bridge = CvBridge()
+        self.target_position = None
+        self.disc_detector_uav = None
+        
         # Keep the Node Running
         rospy.spin()
-
+    
     # -----------------------End of Constructor-------------------------------------------------------------------
-
-    def planCircleTrajectory(self,radius_factor = 1.0):
+    
+    def initialize_grid_sectors(self):
+        """
+        Initialize grid sectors for better coverage distribution
+        """
+        # Create a grid of sectors to ensure good coverage
+        grid_size_x = 4  # Number of grid divisions in X
+        grid_size_y = 4  # Number of grid divisions in Y
+        
+        sector_width = (self.search_area_max_x - self.search_area_min_x) / grid_size_x
+        sector_height = (self.search_area_max_y - self.search_area_min_y) / grid_size_y
+        
+        self.grid_sectors = []
+        for i in range(grid_size_x):
+            for j in range(grid_size_y):
+                sector = {
+                    'min_x': self.search_area_min_x + i * sector_width,
+                    'max_x': self.search_area_min_x + (i + 1) * sector_width,
+                    'min_y': self.search_area_min_y + j * sector_height,
+                    'max_y': self.search_area_min_y + (j + 1) * sector_height,
+                    'visited': False,
+                    'center_x': self.search_area_min_x + (i + 0.5) * sector_width,
+                    'center_y': self.search_area_min_y + (j + 0.5) * sector_height
+                }
+                self.grid_sectors.append(sector)
+        
+        # Shuffle sectors for random order
+        random.shuffle(self.grid_sectors)
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Initialized {len(self.grid_sectors)} grid sectors')
+    
+    def generateRandomPoint(self):
+        """
+        Generate a random (x, y) point with better coverage distribution
+        """
+        if self.grid_coverage_enabled:
+            return self.generateGridBasedPoint()
+        else:
+            return self.generatePureRandomPoint()
+    
+    def generateGridBasedPoint(self):
+        """
+        Generate points using grid-based coverage for maximum area coverage
+        """
+        # Find next unvisited sector
+        unvisited_sectors = [sector for sector in self.grid_sectors if not sector['visited']]
+        
+        if not unvisited_sectors:
+            # All sectors visited, reset and continue with random selection
+            rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: All grid sectors visited, resetting...')
+            for sector in self.grid_sectors:
+                sector['visited'] = False
+            random.shuffle(self.grid_sectors)
+            unvisited_sectors = self.grid_sectors
+        
+        # Select next sector
+        selected_sector = unvisited_sectors[0]
+        selected_sector['visited'] = True
+        
+        # Generate random point within selected sector
+        x = random.uniform(selected_sector['min_x'], selected_sector['max_x'])
+        y = random.uniform(selected_sector['min_y'], selected_sector['max_y'])
+        
+        # Ensure minimum distance from previously visited points
+        max_attempts = 20
+        attempts = 0
+        
+        while attempts < max_attempts:
+            is_valid = True
+            for visited_x, visited_y in self.visited_points:
+                distance = math.sqrt((x - visited_x)**2 + (y - visited_y)**2)
+                if distance < self.min_point_distance:
+                    is_valid = False
+                    break
+            
+            if is_valid:
+                break
+                
+            # Try another point in the same sector
+            x = random.uniform(selected_sector['min_x'], selected_sector['max_x'])
+            y = random.uniform(selected_sector['min_y'], selected_sector['max_y'])
+            attempts += 1
+        
+        self.visited_points.append((x, y))
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated point ({x:.1f}, {y:.1f}) in grid sector')
+        return x, y
+    
+    def generatePureRandomPoint(self):
+        """
+        Generate a random (x, y) point within the search area with large spacing
+        """
+        max_attempts = 50  # Reduced attempts since we want wide spacing
+        attempts = 0
+        
+        while attempts < max_attempts:
+            x = random.uniform(self.search_area_min_x, self.search_area_max_x)
+            y = random.uniform(self.search_area_min_y, self.search_area_max_y)
+            
+            # Check minimum distance from visited points
+            is_valid = True
+            for visited_x, visited_y in self.visited_points:
+                distance = math.sqrt((x - visited_x)**2 + (y - visited_y)**2)
+                if distance < self.min_point_distance:
+                    is_valid = False
+                    break
+            
+            if is_valid:
+                self.visited_points.append((x, y))
+                rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated widely spaced point ({x:.1f}, {y:.1f})')
+                return x, y
+            
+            attempts += 1
+        
+        # If we can't find a point with minimum distance, generate one anyway but log it
+        x = random.uniform(self.search_area_min_x, self.search_area_max_x)
+        y = random.uniform(self.search_area_min_y, self.search_area_max_y)
+        self.visited_points.append((x, y))
+        rospy.logwarn(f'[RandomTrajectory-{self.uav_name}]: Generated point ({x:.1f}, {y:.1f}) after {max_attempts} attempts - may be closer than {self.min_point_distance}m')
+        return x, y
+    
+    def planRandomTrajectory(self, radius_factor=1.0):
+        """
+        Plan a trajectory with random waypoints at the assigned altitude
+        """
         path_msg = PathSrvRequest()
-
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
-
-
+        
+        # First point: transition from start altitude (3m) to assigned altitude
+        first_x, first_y = self.generateRandomPoint()
+        
+        # Transition point (still at start altitude, moving towards first random point)
+        transition_point = Reference()
+        transition_point.position.x = first_x
+        transition_point.position.y = first_y
+        transition_point.position.z = self.start_altitude
+        transition_point.heading = 0.0
+        path_msg.path.points.append(transition_point)
+        
+        # First point at assigned altitude
+        first_point = Reference()
+        first_point.position.x = first_x
+        first_point.position.y = first_y
+        first_point.position.z = self.assigned_altitude
+        first_point.heading = 0.0
+        path_msg.path.points.append(first_point)
+        
+        # Generate remaining random points at assigned altitude
+        for i in range(self.num_trajectory_points - 1):
+            x, y = self.generateRandomPoint()
+            
+            point = Reference()
+            point.position.x = x
+            point.position.y = y
+            point.position.z = self.assigned_altitude
+            
+            # Calculate heading towards next point (or 0 for last point)
+            if i < self.num_trajectory_points - 2:
+                # Look ahead to next point for heading calculation
+                next_x, next_y = self.generateRandomPoint()
+                # Put the next point back for actual use
+                self.visited_points.pop()  # Remove the look-ahead point
+                heading = math.atan2(next_y - y, next_x - x)
+            else:
+                heading = 0.0
+            
+            point.heading = heading
+            path_msg.path.points.append(point)
+        
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints at {self.assigned_altitude}m altitude')
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Total visited points: {len(self.visited_points)}')
+        
+        return path_msg
+    
+    def planCircleTrajectory(self, radius_factor=1.0):
+        """
+        Legacy circular trajectory (kept for compatibility)
+        """
+        path_msg = PathSrvRequest()
+        path_msg.path.header.frame_id = self.frame_id
+        path_msg.path.header.stamp = rospy.Time.now()
+        path_msg.path.fly_now = True
+        path_msg.path.use_heading = True
+        
         radius = self.dimensions_x / 2.0 * radius_factor
         num_points = 30
-
+        
         for i in range(num_points):
             angle = 2 * math.pi * i / num_points
             point = Reference()
@@ -117,7 +301,6 @@ class MultiUAVCoordination:
         
         return path_msg
     
-
     def detectDisc(self, image):
         """
         Detect gray disc with shape and size filtering to avoid detecting drones
@@ -132,7 +315,6 @@ class MultiUAVCoordination:
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
-        # Use underscore to indicate "I don't need this variable"
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         for contour in contours:
@@ -141,7 +323,7 @@ class MultiUAVCoordination:
             contour_area = cv2.contourArea(contour)
             perimeter = cv2.arcLength(contour, True)
             
-            # Size filtering (adjust these values based on your disc size)
+            # Size filtering
             if not (800 < area < 4000):
                 continue
                 
@@ -150,28 +332,27 @@ class MultiUAVCoordination:
                 circularity = 4 * np.pi * contour_area / (perimeter * perimeter)
                 aspect_ratio = float(w) / h
                 
-                # Disc should be circular and round
                 if (circularity > 0.6 and 0.7 < aspect_ratio < 1.4):
-                    rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: "
+                    rospy.loginfo(f"[RandomTrajectory-{self.uav_name}]: "
                                 f"Valid disc - Area: {area}, Circularity: {circularity:.2f}")
                     return True, x, y, w, h
                 else:
-                    rospy.loginfo(f"[SweepingGenerator-{self.uav_name}]: "
+                    rospy.loginfo(f"[RandomTrajectory-{self.uav_name}]: "
                                 f"Shape rejected - Circularity: {circularity:.2f}, "
                                 f"Aspect: {aspect_ratio:.2f}")
         
         return False, 0, 0, 0, 0
+    
     def broadcastDiscDetection(self):
         """Broadcast disc detection to other UAVs"""
         msg = Bool()
         msg.data = True
         self.pub_disc_detection.publish(msg)
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Broadcasting disc detection!')
-
-
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Broadcasting disc detection!')
+    
     # ------------------------------callbacks-------------------------------------------
-
-    def callbackStart(self, req): # from start_in trigger service created by user
+    def callbackStart(self, req):
+        """Start the random trajectory"""
         if not self.is_initialized:
             return Vec1Response(False, "not initialized")
     
@@ -179,23 +360,26 @@ class MultiUAVCoordination:
         if param_value <= 0:
             param_value = 1.0
     
-        path_msg = self.planCircleTrajectory(param_value)
+        # Use random trajectory instead of circular
+        path_msg = self.planRandomTrajectory(param_value)
+        self.current_trajectory_active = True
     
         try:
             response = self.sc_path.call(path_msg)
+            if response.success:
+                rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Started random trajectory with {self.num_trajectory_points} points')
             return Vec1Response(response.success, response.message)
         except Exception as e:
+            rospy.logerr(f'[RandomTrajectory-{self.uav_name}]: Service call failed: {e}')
             return Vec1Response(False, "service call failed")
-
+    
     def callbackCamera(self, data):
         """Process camera frames to detect discs"""
         # Skip processing if we've already detected a disc
-        # or if we're responding to another UAV's detection
         if self.disc_detected or self.disc_detector_uav is not None:
             return
             
         try:
-            
             # Convert ROS Image message to OpenCV image
             cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
             
@@ -216,35 +400,32 @@ class MultiUAVCoordination:
                 # Confirm detection after threshold
                 if self.detection_count >= self.detection_threshold and not self.disc_detected:
                     self.disc_detected = True
-                    self.disc_detector_uav = self.uav_name  # Mark self as the detector
-                    rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Disc detected!')
+                    self.disc_detector_uav = self.uav_name
+                    rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Disc detected!')
                     self.broadcastDiscDetection()
             else:
                 # Reset detection counter if no disc is found
                 self.detection_count = 0
             
-            # Add status text
+            # Add status text with altitude info
             status = "DISC DETECTED" if self.disc_detected else "SEARCHING"
             if self.disc_detector_uav and self.disc_detector_uav != self.uav_name:
                 status = f"FORMATION WITH {self.disc_detector_uav}"
                 
             cv2.putText(cv_image, f"UAV: {self.uav_name} - {status}", (10, 30),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(cv_image, f"Altitude: {self.assigned_altitude}m | Points: {len(self.visited_points)}", (10, 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
             
             # Publish visualization
             viz_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
             self.pub_visualization.publish(viz_msg)
             
         except CvBridgeError as e:
-            rospy.logerr(f"[SweepingGenerator-{self.uav_name}]: {e}")
+            rospy.logerr(f"[RandomTrajectory-{self.uav_name}]: {e}")
 
-
-        
-if __name__ == '__main__': # only run this if someone directly runs this file
+if __name__ == '__main__':
     try:
-        node = MultiUAVCoordination()   # creates and starts the node of drone
-    except rospy.ROSInterruptException:  # like interrupt when cntrl + c is pressed in terminal, this helps in no crashing of entire simulation
+        node = MultiUAVCoordination()
+    except rospy.ROSInterruptException:
         pass
-
-
-        
