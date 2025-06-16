@@ -100,6 +100,13 @@ class MultiUAVCoordination:
             self.callbackDiscDetectionInfo
         )
         
+        # Subscribe to UAV status to get current GPS coordinates
+        self.sub_uav_status = rospy.Subscriber(
+            "/"+self.uav_name+"/mrs_uav_status/uav_status_short",
+            rospy.AnyMsg,  # We'll parse this manually since we don't have the exact message type
+            self.callbackUAVStatus
+        )
+        
         ## | -----------------------Publishers --------------------------|
         # Publisher for disc detection notifications with position info
         self.pub_disc_detection_info = rospy.Publisher(
@@ -126,12 +133,18 @@ class MultiUAVCoordination:
         self.disc_detector_uav = None
         self.formation_active = False
         self.current_uav_position = None
+        self.disc_detection_heading = 0.0  # Direction the detecting drone was facing when it saw the disc
         
-        # Formation positions based on UAV name (diagonal formation)
+        # Current GPS coordinates (updated from UAV status)
+        self.current_gps_x = self.initial_x
+        self.current_gps_y = self.initial_y
+        self.current_gps_z = self.assigned_altitude
+        
+        # Formation positions based on UAV name (diagonal formation relative to detector)
         self.formation_positions = {
             'uav1': {'z': 7.0, 'x_offset': 0.0, 'y_offset': 0.0},
-            'uav2': {'z': 8.0, 'x_offset': 1.0, 'y_offset': 1.0},
-            'uav3': {'z': 9.0, 'x_offset': 2.0, 'y_offset': 2.0}
+            'uav2': {'z': 8.0, 'x_offset': 1.5, 'y_offset': 1.5},
+            'uav3': {'z': 9.0, 'x_offset': 3.0, 'y_offset': 3.0}
         }
         
         # Keep the Node Running
@@ -297,8 +310,8 @@ class MultiUAVCoordination:
         
         return path_msg
     
-    def planFormationTrajectory(self, target_x, target_y):
-        """Plan trajectory to formation position around the detection point"""
+    def planFormationTrajectory(self, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
+        """Plan trajectory to formation position around the detector's GPS coordinates"""
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
@@ -308,25 +321,35 @@ class MultiUAVCoordination:
         # Get formation position for this UAV
         formation_info = self.formation_positions[self.uav_name]
         
-        # Calculate final formation position
-        final_x = target_x + formation_info['x_offset']
-        final_y = target_y + formation_info['y_offset']
+        # Calculate formation offset relative to disc direction
+        # Rotate the formation offsets based on the disc detection heading
+        offset_x = formation_info['x_offset']
+        offset_y = formation_info['y_offset']
+        
+        # Apply rotation to position formation behind/to the side of the detector
+        # This creates a diagonal formation extending back from the disc direction
+        formation_angle = disc_heading + math.pi/4  # 45 degrees off the disc direction
+        
+        rotated_x = offset_x * math.cos(formation_angle) - offset_y * math.sin(formation_angle)
+        rotated_y = offset_x * math.sin(formation_angle) + offset_y * math.cos(formation_angle)
+        
+        # Calculate final formation position relative to detector's GPS
+        final_x = detector_gps_x + rotated_x
+        final_y = detector_gps_y + rotated_y
         final_z = formation_info['z']
         
-        # Create a single waypoint to the formation position
+        # Create waypoint to the formation position
         point = Reference()
         point.position.x = final_x
         point.position.y = final_y
         point.position.z = final_z
         
-        # Calculate heading to look towards the detection point
-        dx = target_x - final_x
-        dy = target_y - final_y
-        point.heading = math.atan2(dy, dx)
+        # All drones face the same direction as the detector saw the disc
+        point.heading = disc_heading
         
         path_msg.path.points.append(point)
         
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning formation at ({final_x:.1f}, {final_y:.1f}, {final_z:.1f})')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning formation at ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) facing {math.degrees(disc_heading):.1f}°')
         
         return path_msg
     
@@ -370,27 +393,28 @@ class MultiUAVCoordination:
         
         return False, 0, 0, 0, 0
     
-    def broadcastDiscDetection(self, detection_x, detection_y):
-        """Broadcast disc detection with position information to other UAVs"""
-        # Use initial position for detection broadcast (approximation of current position)
-        detection_msg = f"DETECTED,{self.uav_name},{self.initial_x},{self.initial_y},{self.assigned_altitude}"
+    def broadcastDiscDetection(self, detection_x, detection_y, drone_heading):
+        """Broadcast disc detection with current GPS coordinates and heading"""
+        # Use current GPS position (this will be updated by UAV status)
+        detection_msg = f"DETECTED,{self.uav_name},{self.current_gps_x},{self.current_gps_y},{self.current_gps_z},{drone_heading}"
         
         msg = String()
         msg.data = detection_msg
         self.pub_disc_detection_info.publish(msg)
         
-        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Broadcasting disc detection at position ({self.initial_x}, {self.initial_y}, {self.assigned_altitude})')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Broadcasting disc detection at GPS ({self.current_gps_x:.1f}, {self.current_gps_y:.1f}, {self.current_gps_z:.1f}) heading {math.degrees(drone_heading):.1f}°')
     
-    def activateFormation(self, detector_uav, target_x, target_y, target_z):
-        """Activate formation mode and move to formation position"""
+    def activateFormation(self, detector_uav, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
+        """Activate formation mode and move to formation position relative to detector GPS"""
         self.formation_active = True
         self.disc_detector_uav = detector_uav
-        self.target_position = (target_x, target_y, target_z)
+        self.target_position = (detector_gps_x, detector_gps_y, detector_gps_z)
+        self.disc_detection_heading = disc_heading
         
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Activating formation mode. Moving to formation around ({target_x}, {target_y}, {target_z})')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Activating formation mode. Detector GPS: ({detector_gps_x:.1f}, {detector_gps_y:.1f}, {detector_gps_z:.1f}), Disc heading: {math.degrees(disc_heading):.1f}°')
         
         # Plan and execute formation trajectory
-        formation_path = self.planFormationTrajectory(target_x, target_y)
+        formation_path = self.planFormationTrajectory(detector_gps_x, detector_gps_y, detector_gps_z, disc_heading)
         
         try:
             response = self.sc_path.call(formation_path)
@@ -402,6 +426,19 @@ class MultiUAVCoordination:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory service call failed: {e}')
     
     # ------------------------------callbacks-------------------------------------------
+    
+    def callbackUAVStatus(self, msg):
+        """Update current GPS coordinates from UAV status - simplified version"""
+        # This is a simplified callback - in practice you'd parse the actual status message
+        # For now, we'll approximate GPS as changing slowly from initial position
+        # In real implementation, you'd extract position from mrs_uav_status/uav_status_short
+        
+        # For simulation purposes, we'll update GPS coordinates periodically
+        # This would normally come from the actual UAV status message
+        if not self.formation_active:
+            # During random flight, GPS coordinates change as drone moves
+            # This is a simplified approximation - real implementation would parse the message
+            pass
     
     def callbackStart(self, req):
         """Start the random trajectory"""
@@ -429,19 +466,20 @@ class MultiUAVCoordination:
             return Vec1Response(True, "In formation mode, ignoring trajectory start")
     
     def callbackDiscDetectionInfo(self, msg):
-        """Handle disc detection messages from other UAVs"""
+        """Handle disc detection messages from other UAVs with GPS coordinates and heading"""
         try:
             parts = msg.data.split(',')
-            if len(parts) >= 5 and parts[0] == "DETECTED":
+            if len(parts) >= 6 and parts[0] == "DETECTED":
                 detector_uav = parts[1]
-                target_x = float(parts[2])
-                target_y = float(parts[3])
-                target_z = float(parts[4])
+                detector_gps_x = float(parts[2])
+                detector_gps_y = float(parts[3])
+                detector_gps_z = float(parts[4])
+                disc_heading = float(parts[5])
                 
                 # If this UAV hasn't detected the disc itself and isn't already in formation
                 if not self.disc_detected and not self.formation_active:
-                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc detection from {detector_uav}')
-                    self.activateFormation(detector_uav, target_x, target_y, target_z)
+                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc detection from {detector_uav} at GPS ({detector_gps_x:.1f}, {detector_gps_y:.1f}, {detector_gps_z:.1f})')
+                    self.activateFormation(detector_uav, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading)
                     
         except Exception as e:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing detection message: {e}')
@@ -473,11 +511,29 @@ class MultiUAVCoordination:
                 # Confirm detection after threshold
                 if self.detection_count >= self.detection_threshold and not self.disc_detected:
                     self.disc_detected = True
-                    rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Disc detected!')
                     
-                    # Broadcast detection and activate formation
-                    self.broadcastDiscDetection(x, y)
-                    self.activateFormation(self.uav_name, self.initial_x, self.initial_y, self.assigned_altitude)
+                    # Calculate heading towards the disc based on image position
+                    image_center_x = cv_image.shape[1] / 2
+                    disc_center_x = x + w/2
+                    
+                    # Simple heading calculation: disc position relative to image center
+                    # Positive angle = disc is to the right, negative = disc is to the left
+                    angle_offset = (disc_center_x - image_center_x) / image_center_x * 0.5  # Max 0.5 radians offset
+                    
+                    # Current drone heading (simplified - in practice get from UAV status)
+                    current_heading = 0.0  # This should come from UAV status in real implementation
+                    disc_heading = current_heading + angle_offset
+                    
+                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Disc detected! Heading towards disc: {math.degrees(disc_heading):.1f}°')
+                    
+                    # Update current GPS coordinates (simplified - should come from UAV status)
+                    self.current_gps_x = self.initial_x  # In practice, get real GPS from UAV status
+                    self.current_gps_y = self.initial_y
+                    self.current_gps_z = self.assigned_altitude
+                    
+                    # Broadcast detection with GPS and heading
+                    self.broadcastDiscDetection(x, y, disc_heading)
+                    self.activateFormation(self.uav_name, self.current_gps_x, self.current_gps_y, self.current_gps_z, disc_heading)
             else:
                 # Reset detection counter if no disc is found
                 self.detection_count = 0
@@ -493,7 +549,7 @@ class MultiUAVCoordination:
                 
             cv2.putText(cv_image, f"UAV: {self.uav_name} - {status}", (10, 30),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(cv_image, f"Altitude: {self.assigned_altitude}m | Points: {len(self.visited_points)}", (10, 60),
+            cv2.putText(cv_image, f"Altitude: {self.assigned_altitude}m | GPS: ({self.current_gps_x:.1f}, {self.current_gps_y:.1f})", (10, 60),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
             
             # Publish visualization

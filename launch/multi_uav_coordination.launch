@@ -39,6 +39,11 @@
       <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
+      <!-- UAV status and navigation remappings for GPS and heading -->
+      <remap from="~uav_status_in" to="mrs_uav_status/uav_status_short" />
+      <remap from="~odometry_in" to="mrs_uav_status/odom_main" />
+      <remap from="~imu_in" to="mavros/imu/data" />
+      
       <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
@@ -91,6 +96,11 @@
       <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
+      <!-- UAV status and navigation remappings for GPS and heading -->
+      <remap from="~uav_status_in" to="mrs_uav_status/uav_status_short" />
+      <remap from="~odometry_in" to="mrs_uav_status/odom_main" />
+      <remap from="~imu_in" to="mavros/imu/data" />
+      
       <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
@@ -133,6 +143,11 @@
       <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
+      <!-- UAV status and navigation remappings for GPS and heading -->
+      <remap from="~uav_status_in" to="mrs_uav_status/uav_status_short" />
+      <remap from="~odometry_in" to="mrs_uav_status/odom_main" />
+      <remap from="~imu_in" to="mavros/imu/data" />
+      
       <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
@@ -145,13 +160,13 @@
     <node name="nimbro_sender_uav1" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav2_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short /uav1/mrs_uav_status/odom_main"/>
     </node>
     
     <node name="nimbro_sender_uav1_to_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav3_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short /uav1/mrs_uav_status/odom_main"/>
     </node>
   </group>
   
@@ -160,13 +175,13 @@
     <node name="nimbro_sender_uav2" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav1_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short /uav2/mrs_uav_status/odom_main"/>
     </node>
     
     <node name="nimbro_sender_uav2_to_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav3_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short /uav2/mrs_uav_status/odom_main"/>
     </node>
   </group>
   
@@ -175,13 +190,13 @@
     <node name="nimbro_sender_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav1_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short /uav3/mrs_uav_status/odom_main"/>
     </node>
     
     <node name="nimbro_sender_uav3_to_uav2" pkg="nimbro_topic_transport" type="sender" output="screen">
       <param name="destination_addr" value="uav2_ip_address"/>
       <param name="destination_port" value="17001"/>
-      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short"/>
+      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short /uav3/mrs_uav_status/odom_main"/>
     </node>
   </group>
   
