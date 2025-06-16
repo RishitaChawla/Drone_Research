@@ -6,7 +6,8 @@ import random
 from mrs_msgs.srv import PathSrv, PathSrvRequest
 from mrs_msgs.srv import Vec1, Vec1Response
 from mrs_msgs.msg import Reference
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
+from geometry_msgs.msg import Point
 import cv2 # OpenCV library for computer vision
 from cv_bridge import CvBridge, CvBridgeError # Converts ROS Image messages and OpenCV format
 from sensor_msgs.msg import Image # ROS Message type for camera data
@@ -32,13 +33,13 @@ class MultiUAVCoordination:
         self.hit_image_threshold = float(rospy.get_param("~hit_image_threshold", 0.6))
         
         # Random trajectory parameters - Use full world space by default
-        self.search_area_min_x = float(rospy.get_param("~search_area/min_x", -20.0))  # Use most of the world space
-        self.search_area_max_x = float(rospy.get_param("~search_area/max_x", 20.0))   # Leave safety margin
-        self.search_area_min_y = float(rospy.get_param("~search_area/min_y", -20.0))  
+        self.search_area_min_x = float(rospy.get_param("~search_area/min_x", -20.0))
+        self.search_area_max_x = float(rospy.get_param("~search_area/max_x", 20.0))
+        self.search_area_min_y = float(rospy.get_param("~search_area/min_y", -20.0))
         self.search_area_max_y = float(rospy.get_param("~search_area/max_y", 20.0))
-        self.min_point_distance = float(rospy.get_param("~min_point_distance", 25.0))  # Large step size for wide coverage
-        self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 12))  # Fewer points, widely spaced
-        self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)  # Use pure random for maximum spread
+        self.min_point_distance = float(rospy.get_param("~min_point_distance", 25.0))
+        self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 12))
+        self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)
         
         # MODIFIED: UAV altitude assignment with your specified altitudes
         self.altitude_map = {
@@ -48,6 +49,9 @@ class MultiUAVCoordination:
         }
         # MODIFIED: Remove start_altitude concept - drones will start directly at their assigned altitude
         self.assigned_altitude = self.altitude_map.get(self.uav_name, 9.0)  # Default to 9.0 if UAV name not found
+        
+        # Formation parameters
+        self.formation_offset = rospy.get_param("~formation_offset", 2.0)
         
         self.is_initialized = False
         
@@ -65,7 +69,7 @@ class MultiUAVCoordination:
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized at altitude {self.assigned_altitude}m')
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Initial position will be ({self.initial_x}, {self.initial_y}, {self.assigned_altitude})')
         
-         ## | --------------------- service clients -------------------- |
+        ## | --------------------- service clients -------------------- |
         self.sc_path = rospy.ServiceProxy('~path_out', PathSrv)
         
         ## | --------------------- service servers -------------------- |
@@ -79,20 +83,38 @@ class MultiUAVCoordination:
             self.callbackCamera
         )
         
-        # Publisher for disc detection notifications
-        self.pub_disc_detection = rospy.Publisher(
-            "/"+self.uav_name+"/disc_detection", 
-            Bool, 
+        # Subscribe to disc detection messages from other UAVs
+        self.sub_disc_detection_uav1 = rospy.Subscriber(
+            "/uav1/disc_detection_info", 
+            String, 
+            self.callbackDiscDetectionInfo
+        )
+        self.sub_disc_detection_uav2 = rospy.Subscriber(
+            "/uav2/disc_detection_info", 
+            String, 
+            self.callbackDiscDetectionInfo
+        )
+        self.sub_disc_detection_uav3 = rospy.Subscriber(
+            "/uav3/disc_detection_info", 
+            String, 
+            self.callbackDiscDetectionInfo
+        )
+        
+        ## | -----------------------Publishers --------------------------|
+        # Publisher for disc detection notifications with position info
+        self.pub_disc_detection_info = rospy.Publisher(
+            "/"+self.uav_name+"/disc_detection_info", 
+            String, 
             queue_size=10
-        )       
+        )
         
         # Publisher for visualization
         self.pub_visualization = rospy.Publisher(
             "~visualization_out",
             Image,
             queue_size=10   
-        )       
-       
+        )
+        
         self.is_initialized = True
         rospy.loginfo(f'[MultiUAVCoordination and Random Trajectory Generator-{self.uav_name}]: Ready and waiting...')
         
@@ -102,6 +124,15 @@ class MultiUAVCoordination:
         self.bridge = CvBridge()
         self.target_position = None
         self.disc_detector_uav = None
+        self.formation_active = False
+        self.current_uav_position = None
+        
+        # Formation positions based on UAV name (diagonal formation)
+        self.formation_positions = {
+            'uav1': {'z': 7.0, 'x_offset': 0.0, 'y_offset': 0.0},
+            'uav2': {'z': 8.0, 'x_offset': 1.0, 'y_offset': 1.0},
+            'uav3': {'z': 9.0, 'x_offset': 2.0, 'y_offset': 2.0}
+        }
         
         # Keep the Node Running
         rospy.spin()
@@ -109,9 +140,7 @@ class MultiUAVCoordination:
     # -----------------------End of Constructor-------------------------------------------------------------------
     
     def initialize_grid_sectors(self):
-        """
-        Initialize grid sectors for better coverage distribution
-        """
+        """Initialize grid sectors for better coverage distribution"""
         # Create a grid of sectors to ensure good coverage
         grid_size_x = 4  # Number of grid divisions in X
         grid_size_y = 4  # Number of grid divisions in Y
@@ -138,18 +167,14 @@ class MultiUAVCoordination:
         rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Initialized {len(self.grid_sectors)} grid sectors')
     
     def generateRandomPoint(self):
-        """
-        Generate a random (x, y) point with better coverage distribution
-        """
+        """Generate a random (x, y) point with better coverage distribution"""
         if self.grid_coverage_enabled:
             return self.generateGridBasedPoint()
         else:
             return self.generatePureRandomPoint()
     
     def generateGridBasedPoint(self):
-        """
-        Generate points using grid-based coverage for maximum area coverage
-        """
+        """Generate points using grid-based coverage for maximum area coverage"""
         # Find next unvisited sector
         unvisited_sectors = [sector for sector in self.grid_sectors if not sector['visited']]
         
@@ -194,9 +219,7 @@ class MultiUAVCoordination:
         return x, y
     
     def generatePureRandomPoint(self):
-        """
-        Generate a random (x, y) point within the search area with large spacing
-        """
+        """Generate a random (x, y) point within the search area with large spacing"""
         max_attempts = 50  # Reduced attempts since we want wide spacing
         attempts = 0
         
@@ -227,9 +250,7 @@ class MultiUAVCoordination:
         return x, y
     
     def planRandomTrajectory(self, radius_factor=1.0):
-        """
-        MODIFIED: Plan a trajectory that maintains fixed altitudes - no initial ascent
-        """
+        """MODIFIED: Plan a trajectory that maintains fixed altitudes - no initial ascent"""
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
@@ -276,34 +297,41 @@ class MultiUAVCoordination:
         
         return path_msg
     
-    def planCircleTrajectory(self, radius_factor=1.0):
-        """
-        Legacy circular trajectory (kept for compatibility)
-        """
+    def planFormationTrajectory(self, target_x, target_y):
+        """Plan trajectory to formation position around the detection point"""
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
         
-        radius = self.dimensions_x / 2.0 * radius_factor
-        num_points = 30
+        # Get formation position for this UAV
+        formation_info = self.formation_positions[self.uav_name]
         
-        for i in range(num_points):
-            angle = 2 * math.pi * i / num_points
-            point = Reference()
-            point.position.x = self.center_x + radius * math.cos(angle)
-            point.position.y = self.center_y + radius * math.sin(angle)
-            point.position.z = self.center_z
-            point.heading = angle + math.pi / 2
-            path_msg.path.points.append(point)
+        # Calculate final formation position
+        final_x = target_x + formation_info['x_offset']
+        final_y = target_y + formation_info['y_offset']
+        final_z = formation_info['z']
+        
+        # Create a single waypoint to the formation position
+        point = Reference()
+        point.position.x = final_x
+        point.position.y = final_y
+        point.position.z = final_z
+        
+        # Calculate heading to look towards the detection point
+        dx = target_x - final_x
+        dy = target_y - final_y
+        point.heading = math.atan2(dy, dx)
+        
+        path_msg.path.points.append(point)
+        
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning formation at ({final_x:.1f}, {final_y:.1f}, {final_z:.1f})')
         
         return path_msg
     
     def detectDisc(self, image):
-        """
-        Detect gray disc with shape and size filtering to avoid detecting drones
-        """
+        """Detect gray disc with shape and size filtering to avoid detecting drones"""
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         
         # Color detection
@@ -342,14 +370,39 @@ class MultiUAVCoordination:
         
         return False, 0, 0, 0, 0
     
-    def broadcastDiscDetection(self):
-        """Broadcast disc detection to other UAVs"""
-        msg = Bool()
-        msg.data = True
-        self.pub_disc_detection.publish(msg)
-        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Broadcasting disc detection!')
+    def broadcastDiscDetection(self, detection_x, detection_y):
+        """Broadcast disc detection with position information to other UAVs"""
+        # Use initial position for detection broadcast (approximation of current position)
+        detection_msg = f"DETECTED,{self.uav_name},{self.initial_x},{self.initial_y},{self.assigned_altitude}"
+        
+        msg = String()
+        msg.data = detection_msg
+        self.pub_disc_detection_info.publish(msg)
+        
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Broadcasting disc detection at position ({self.initial_x}, {self.initial_y}, {self.assigned_altitude})')
+    
+    def activateFormation(self, detector_uav, target_x, target_y, target_z):
+        """Activate formation mode and move to formation position"""
+        self.formation_active = True
+        self.disc_detector_uav = detector_uav
+        self.target_position = (target_x, target_y, target_z)
+        
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Activating formation mode. Moving to formation around ({target_x}, {target_y}, {target_z})')
+        
+        # Plan and execute formation trajectory
+        formation_path = self.planFormationTrajectory(target_x, target_y)
+        
+        try:
+            response = self.sc_path.call(formation_path)
+            if response.success:
+                rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory sent successfully')
+            else:
+                rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory failed: {response.message}')
+        except Exception as e:
+            rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory service call failed: {e}')
     
     # ------------------------------callbacks-------------------------------------------
+    
     def callbackStart(self, req):
         """Start the random trajectory"""
         if not self.is_initialized:
@@ -359,23 +412,44 @@ class MultiUAVCoordination:
         if param_value <= 0:
             param_value = 1.0
     
-        # Use random trajectory instead of circular
-        path_msg = self.planRandomTrajectory(param_value)
-        self.current_trajectory_active = True
+        # Only start trajectory if not in formation mode
+        if not self.formation_active:
+            path_msg = self.planRandomTrajectory(param_value)
+            self.current_trajectory_active = True
     
+            try:
+                response = self.sc_path.call(path_msg)
+                if response.success:
+                    rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Started random trajectory with {self.num_trajectory_points} points')
+                return Vec1Response(response.success, response.message)
+            except Exception as e:
+                rospy.logerr(f'[RandomTrajectory-{self.uav_name}]: Service call failed: {e}')
+                return Vec1Response(False, "service call failed")
+        else:
+            return Vec1Response(True, "In formation mode, ignoring trajectory start")
+    
+    def callbackDiscDetectionInfo(self, msg):
+        """Handle disc detection messages from other UAVs"""
         try:
-            response = self.sc_path.call(path_msg)
-            if response.success:
-                rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Started random trajectory with {self.num_trajectory_points} points')
-            return Vec1Response(response.success, response.message)
+            parts = msg.data.split(',')
+            if len(parts) >= 5 and parts[0] == "DETECTED":
+                detector_uav = parts[1]
+                target_x = float(parts[2])
+                target_y = float(parts[3])
+                target_z = float(parts[4])
+                
+                # If this UAV hasn't detected the disc itself and isn't already in formation
+                if not self.disc_detected and not self.formation_active:
+                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc detection from {detector_uav}')
+                    self.activateFormation(detector_uav, target_x, target_y, target_z)
+                    
         except Exception as e:
-            rospy.logerr(f'[RandomTrajectory-{self.uav_name}]: Service call failed: {e}')
-            return Vec1Response(False, "service call failed")
+            rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing detection message: {e}')
     
     def callbackCamera(self, data):
         """Process camera frames to detect discs"""
-        # Skip processing if we've already detected a disc
-        if self.disc_detected or self.disc_detector_uav is not None:
+        # Skip processing if we're already in formation mode
+        if self.formation_active:
             return
             
         try:
@@ -399,17 +473,23 @@ class MultiUAVCoordination:
                 # Confirm detection after threshold
                 if self.detection_count >= self.detection_threshold and not self.disc_detected:
                     self.disc_detected = True
-                    self.disc_detector_uav = self.uav_name
                     rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Disc detected!')
-                    self.broadcastDiscDetection()
+                    
+                    # Broadcast detection and activate formation
+                    self.broadcastDiscDetection(x, y)
+                    self.activateFormation(self.uav_name, self.initial_x, self.initial_y, self.assigned_altitude)
             else:
                 # Reset detection counter if no disc is found
                 self.detection_count = 0
             
-            # Add status text with altitude info
-            status = "DISC DETECTED" if self.disc_detected else "SEARCHING"
-            if self.disc_detector_uav and self.disc_detector_uav != self.uav_name:
-                status = f"FORMATION WITH {self.disc_detector_uav}"
+            # Add status text with altitude and formation info
+            if self.formation_active:
+                if self.disc_detector_uav == self.uav_name:
+                    status = "FORMATION LEADER"
+                else:
+                    status = f"FORMATION WITH {self.disc_detector_uav}"
+            else:
+                status = "DISC DETECTED" if self.disc_detected else "RANDOM SEARCH"
                 
             cv2.putText(cv_image, f"UAV: {self.uav_name} - {status}", (10, 30),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
