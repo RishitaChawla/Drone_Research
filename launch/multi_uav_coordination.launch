@@ -1,89 +1,189 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- UAV1 - Circle Trajectory -->
+  <!-- Launch a multi-UAV coordination system with formation behavior -->
+  
+  <!-- UAV1 - Starting at altitude 5 -->
   <group ns="uav1">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
-      <!-- Basic required parameters -->
-      <param name="frame_id" value="world_origin" />
+      <!-- ROS parameters config file -->
+      <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
+      
+      <!-- Random trajectory parameters -->
       <param name="trajectory_type" value="random" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
-      <param name="center/z" value="9.0" />
-      <param name="dimensions/x" value="10.0" />
-      <param name="dimensions/y" value="10.0" />
-
-      <param name="initial_position/x" value="x1_value"/>
-      <param name="initial_position/y" value="y1_value"/>
+      <param name="center/z" value="5.0" />  <!-- Initial altitude -->
+      <param name="dimensions/x" value="20.0" />
+      <param name="dimensions/y" value="20.0" />
       
-      <!-- ADD THESE DETECTION PARAMETERS -->
+      <!-- Random search area parameters -->
+      <param name="search_area/min_x" value="-20.0" />
+      <param name="search_area/max_x" value="20.0" />
+      <param name="search_area/min_y" value="-20.0" />
+      <param name="search_area/max_y" value="20.0" />
+      <param name="min_point_distance" value="25.0" />
+      <param name="num_trajectory_points" value="12" />
+      <param name="grid_coverage_enabled" value="false" />
+      
+      <!-- Formation parameters -->
+      <param name="formation_offset" value="2.0" />
+      
+      <!-- Disc detection parameters -->
       <param name="detection_threshold" value="3" />
-      <param name="hit_distance_threshold" value="1.0" />
-      <param name="hit_image_threshold" value="0.6" />
-      <param name="timer_main/rate" value="1.0" />
       
-      <!-- Service remappings -->
-      <remap from="~control_manager_diag_in" to="/uav1/control_manager/diagnostics" />
+      <!-- Standard topic remappings -->
+      <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
-      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
   
-  <!-- UAV2 - Same setup -->
+  <!-- UAV2 - Starting at altitude 6 -->
   <group ns="uav2">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
-      <param name="frame_id" value="world_origin" />
+      <!-- ROS parameters config file -->
+      <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
+      
+      <!-- Random trajectory parameters -->
       <param name="trajectory_type" value="random" />
-      <param name="center/x" value="0.0" />
-      <param name="center/y" value="0.0" />
-      <param name="center/z" value="8.0" />
-      <param name="dimensions/x" value="10.0" />
-      <param name="dimensions/y" value="10.0" />
-
-      <!-- For UAV2 -->
-    <param name="initial_position/x" value="x2_value"/>
-    <param name="initial_position/y" value="y2_value"/>
+      <param name="center/x" value="-15.0" />
+      <param name="center/y" value="15.0" />
+      <param name="center/z" value="6.0" />  <!-- Initial altitude -->
+      <param name="dimensions/x" value="20.0" />
+      <param name="dimensions/y" value="20.0" />
       
-      <!-- ADD THESE DETECTION PARAMETERS -->
+      <!-- Random search area parameters -->
+      <param name="search_area/min_x" value="-25.0" />
+      <param name="search_area/max_x" value="-5.0" />
+      <param name="search_area/min_y" value="5.0" />
+      <param name="search_area/max_y" value="25.0" />
+      <param name="min_point_distance" value="25.0" />
+      <param name="num_trajectory_points" value="12" />
+      <param name="grid_coverage_enabled" value="false" />
+      
+      <!-- Formation parameters -->
+      <param name="formation_offset" value="2.0" />
+      
+      <!-- Disc detection parameters -->
       <param name="detection_threshold" value="3" />
-      <param name="hit_distance_threshold" value="1.0" />
-      <param name="hit_image_threshold" value="0.6" />
-      <param name="timer_main/rate" value="1.0" />
       
-      <remap from="~control_manager_diag_in" to="/uav2/control_manager/diagnostics" />
+      <!-- Standard topic remappings -->
+      <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
-      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
   
-  <!-- UAV3 - Same setup -->
+  <!-- UAV3 - Starting at altitude 7 -->
   <group ns="uav3">
     <node pkg="example_multi_uav_coordination" type="multi_uav_coordination.py" name="multi_uav_coordination" output="screen">
-      <param name="frame_id" value="world_origin" />
+      <!-- ROS parameters config file -->
+      <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
+      
+      <!-- Random trajectory parameters -->
       <param name="trajectory_type" value="random" />
-      <param name="center/x" value="0.0" />
-      <param name="center/y" value="0.0" />
-      <param name="center/z" value="7.0" />
-      <param name="dimensions/x" value="10.0" />
-      <param name="dimensions/y" value="10.0" />
-
-      <param name="initial_position/x" value="x3_value"/>
-      <param name="initial_position/y" value="y3_value"/>
+      <param name="center/x" value="15.0" />
+      <param name="center/y" value="-15.0" />
+      <param name="center/z" value="7.0" />  <!-- Initial altitude -->
+      <param name="dimensions/x" value="20.0" />
+      <param name="dimensions/y" value="20.0" />
       
-      <!-- ADD THESE DETECTION PARAMETERS -->
+      <!-- Random search area parameters -->
+      <param name="search_area/min_x" value="5.0" />
+      <param name="search_area/max_x" value="25.0" />
+      <param name="search_area/min_y" value="-25.0" />
+      <param name="search_area/max_y" value="-5.0" />
+      <param name="min_point_distance" value="25.0" />
+      <param name="num_trajectory_points" value="12" />
+      <param name="grid_coverage_enabled" value="false" />
+      
+      <!-- Formation parameters -->
+      <param name="formation_offset" value="2.0" />
+      
+      <!-- Disc detection parameters -->
       <param name="detection_threshold" value="3" />
-      <param name="hit_distance_threshold" value="1.0" />
-      <param name="hit_image_threshold" value="0.6" />
-      <param name="timer_main/rate" value="1.0" />
       
-      <remap from="~control_manager_diag_in" to="/uav3/control_manager/diagnostics" />
+      <!-- Standard topic remappings -->
+      <remap from="~control_manager_diag_in" to="control_manager/diagnostics" />
       <remap from="~path_out" to="trajectory_generation/path" />
       
-      <!-- ADD THIS VISUALIZATION REMAPPING -->
+      <!-- Visualization output -->
       <remap from="~visualization_out" to="disc_detection_visualization" />
     </node>
   </group>
+  
+  <!-- NIMBRO network configuration for inter-UAV communication -->
+  
+  <!-- UAV1 topic sender to UAV2 and UAV3 -->
+  <group ns="uav1">
+    <node name="nimbro_sender_uav1" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav2_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short"/>
+    </node>
+    
+    <node name="nimbro_sender_uav1_to_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav3_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav1/disc_detection_info /uav1/mrs_uav_status/uav_status_short"/>
+    </node>
+  </group>
+  
+  <!-- UAV2 topic sender to UAV1 and UAV3 -->
+  <group ns="uav2">
+    <node name="nimbro_sender_uav2" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav1_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short"/>
+    </node>
+    
+    <node name="nimbro_sender_uav2_to_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav3_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav2/disc_detection_info /uav2/mrs_uav_status/uav_status_short"/>
+    </node>
+  </group>
+  
+  <!-- UAV3 topic sender to UAV1 and UAV2 -->
+  <group ns="uav3">
+    <node name="nimbro_sender_uav3" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav1_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short"/>
+    </node>
+    
+    <node name="nimbro_sender_uav3_to_uav2" pkg="nimbro_topic_transport" type="sender" output="screen">
+      <param name="destination_addr" value="uav2_ip_address"/>
+      <param name="destination_port" value="17001"/>
+      <param name="topic_names" type="string" value="/uav3/disc_detection_info /uav3/mrs_uav_status/uav_status_short"/>
+    </node>
+  </group>
+  
+  <!-- NIMBRO receivers for each UAV -->
+  <group ns="uav1">
+    <node name="nimbro_receiver_uav1" pkg="nimbro_topic_transport" type="receiver" output="screen">
+      <param name="port" value="17001"/>
+    </node>
+  </group>
+  
+  <group ns="uav2">
+    <node name="nimbro_receiver_uav2" pkg="nimbro_topic_transport" type="receiver" output="screen">
+      <param name="port" value="17001"/>
+    </node>
+  </group>
+  
+  <group ns="uav3">
+    <node name="nimbro_receiver_uav3" pkg="nimbro_topic_transport" type="receiver" output="screen">
+      <param name="port" value="17001"/>
+    </node>
+  </group>
+  
+  <!-- Start each UAV individually via service calls:
+       rosservice call /uav1/multi_uav_coordination/start_in "goal: 1.0"
+       rosservice call /uav2/multi_uav_coordination/start_in "goal: 1.0" 
+       rosservice call /uav3/multi_uav_coordination/start_in "goal: 1.0" -->  
 </launch>

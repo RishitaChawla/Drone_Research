@@ -19,35 +19,35 @@ class MultiUAVCoordination:
         ## | --------------------- load parameters -------------------- |
         # Original trajectory parameters
         self.frame_id = rospy.get_param("~frame_id")
-        self.center_x = rospy.get_param("~center/x")
-        self.center_y = rospy.get_param("~center/y")
-        self.center_z = rospy.get_param("~center/z")
-        self.dimensions_x = rospy.get_param("~dimensions/x")
-        self.dimensions_y = rospy.get_param("~dimensions/y")
+        self.center_x = float(rospy.get_param("~center/x"))
+        self.center_y = float(rospy.get_param("~center/y"))
+        self.center_z = float(rospy.get_param("~center/z"))
+        self.dimensions_x = float(rospy.get_param("~dimensions/x"))
+        self.dimensions_y = float(rospy.get_param("~dimensions/y"))
         self.trajectory_type = rospy.get_param("~trajectory_type", "random")
         
         # Disc detection parameters
-        self.detection_threshold = rospy.get_param("~detection_threshold", 3)
-        self.hit_distance_threshold = rospy.get_param("~hit_distance_threshold", 1.0)
-        self.hit_image_threshold = rospy.get_param("~hit_image_threshold", 0.6)
+        self.detection_threshold = int(rospy.get_param("~detection_threshold", 3))
+        self.hit_distance_threshold = float(rospy.get_param("~hit_distance_threshold", 1.0))
+        self.hit_image_threshold = float(rospy.get_param("~hit_image_threshold", 0.6))
         
         # Random trajectory parameters - Use full world space by default
-        self.search_area_min_x = rospy.get_param("~search_area/min_x", -20.0)  # Use most of the world space
-        self.search_area_max_x = rospy.get_param("~search_area/max_x", 20.0)   # Leave safety margin
-        self.search_area_min_y = rospy.get_param("~search_area/min_y", -20.0)  
-        self.search_area_max_y = rospy.get_param("~search_area/max_y", 20.0)
-        self.min_point_distance = rospy.get_param("~min_point_distance", 25.0)  # Large step size for wide coverage
-        self.num_trajectory_points = rospy.get_param("~num_trajectory_points", 12)  # Fewer points, widely spaced
+        self.search_area_min_x = float(rospy.get_param("~search_area/min_x", -20.0))  # Use most of the world space
+        self.search_area_max_x = float(rospy.get_param("~search_area/max_x", 20.0))   # Leave safety margin
+        self.search_area_min_y = float(rospy.get_param("~search_area/min_y", -20.0))  
+        self.search_area_max_y = float(rospy.get_param("~search_area/max_y", 20.0))
+        self.min_point_distance = float(rospy.get_param("~min_point_distance", 25.0))  # Large step size for wide coverage
+        self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 12))  # Fewer points, widely spaced
         self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)  # Use pure random for maximum spread
         
-        # UAV altitude assignment
+        # MODIFIED: UAV altitude assignment with your specified altitudes
         self.altitude_map = {
-            "uav1": 6.0,
-            "uav2": 7.0,
-            "uav3": 8.0
+            "uav1": 9.0,  # Changed from 6.0 to 9.0
+            "uav2": 8.0,  # Changed from 7.0 to 8.0
+            "uav3": 7.0   # Remains 7.0 (was 8.0)
         }
-        self.start_altitude = 3.0
-        self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)
+        # MODIFIED: Remove start_altitude concept - drones will start directly at their assigned altitude
+        self.assigned_altitude = self.altitude_map.get(self.uav_name, 9.0)  # Default to 9.0 if UAV name not found
         
         self.is_initialized = False
         
@@ -57,8 +57,13 @@ class MultiUAVCoordination:
         self.grid_sectors = []  # Track which grid sectors have been visited
         self.initialize_grid_sectors()
         
+        # MODIFIED: Get current position from Gazebo for initial waypoint
+        self.initial_x = float(rospy.get_param("~initial_position/x", 0.0))  # Get from launch file or default
+        self.initial_y = float(rospy.get_param("~initial_position/y", 0.0))  # Get from launch file or default
+        
         # Log that we're starting
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized at altitude {self.assigned_altitude}m')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Initial position will be ({self.initial_x}, {self.initial_y}, {self.assigned_altitude})')
         
          ## | --------------------- service clients -------------------- |
         self.sc_path = rospy.ServiceProxy('~path_out', PathSrv)
@@ -223,7 +228,7 @@ class MultiUAVCoordination:
     
     def planRandomTrajectory(self, radius_factor=1.0):
         """
-        Plan a trajectory with random waypoints at the assigned altitude
+        MODIFIED: Plan a trajectory that maintains fixed altitudes - no initial ascent
         """
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
@@ -231,33 +236,27 @@ class MultiUAVCoordination:
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
         
-        # First point: transition from start altitude (3m) to assigned altitude
-        first_x, first_y = self.generateRandomPoint()
+        # MODIFIED: First waypoint maintains current altitude - no vertical movement
+        initial_point = Reference()
+        initial_point.position.x = self.initial_x
+        initial_point.position.y = self.initial_y
+        initial_point.position.z = self.assigned_altitude  # Maintain fixed altitude (9m, 8m, or 7m)
+        initial_point.heading = 0.0
+        path_msg.path.points.append(initial_point)
         
-        # Transition point (still at start altitude, moving towards first random point)
-        transition_point = Reference()
-        transition_point.position.x = first_x
-        transition_point.position.y = first_y
-        transition_point.position.z = self.start_altitude
-        transition_point.heading = 0.0
-        path_msg.path.points.append(transition_point)
+        # Add the initial position to visited points to avoid generating points too close
+        self.visited_points.append((self.initial_x, self.initial_y))
         
-        # First point at assigned altitude
-        first_point = Reference()
-        first_point.position.x = first_x
-        first_point.position.y = first_y
-        first_point.position.z = self.assigned_altitude
-        first_point.heading = 0.0
-        path_msg.path.points.append(first_point)
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: First waypoint at ({self.initial_x}, {self.initial_y}, {self.assigned_altitude}) - maintaining current altitude')
         
-        # Generate remaining random points at assigned altitude
-        for i in range(self.num_trajectory_points - 1):
+        # Generate remaining random points - X,Y vary, Z stays fixed at assigned altitude
+        for i in range(self.num_trajectory_points - 1):  # -1 because we already added the initial point
             x, y = self.generateRandomPoint()
             
             point = Reference()
-            point.position.x = x
-            point.position.y = y
-            point.position.z = self.assigned_altitude
+            point.position.x = x  # Random X coordinate
+            point.position.y = y  # Random Y coordinate
+            point.position.z = self.assigned_altitude  # Fixed Z altitude (9m, 8m, or 7m)
             
             # Calculate heading towards next point (or 0 for last point)
             if i < self.num_trajectory_points - 2:
@@ -272,8 +271,8 @@ class MultiUAVCoordination:
             point.heading = heading
             path_msg.path.points.append(point)
         
-        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints at {self.assigned_altitude}m altitude')
-        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Total visited points: {len(self.visited_points)}')
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints at fixed altitude {self.assigned_altitude}m')
+        rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: X,Y coordinates vary randomly, Z stays constant')
         
         return path_msg
     
