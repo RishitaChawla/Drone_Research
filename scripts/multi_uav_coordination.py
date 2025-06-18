@@ -39,14 +39,14 @@ class MultiUAVCoordination:
         self.search_area_min_y = float(rospy.get_param("~search_area/min_y", -10.0))
         self.search_area_max_y = float(rospy.get_param("~search_area/max_y", 10.0))
         self.min_point_distance = float(rospy.get_param("~min_point_distance", 25.0))
-        self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 12))
+        self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 25))
         self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)
         
         # UAV altitude assignment
         self.altitude_map = {
-            "uav1": 6.0,
+            "uav1": 4.0,
             "uav2": 5.0,
-            "uav3": 4.0
+            "uav3": 6.0
         }
         self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)  # Default to 6.0 if UAV name not found
         
@@ -144,9 +144,9 @@ class MultiUAVCoordination:
         
         # Formation positions based on UAV name (diagonal formation relative to detector)
         self.formation_positions = {
-            'uav1': {'z': 6.0, 'x_offset': 0.6, 'y_offset': 0.6},
-            'uav2': {'z': 5.0, 'x_offset': 0.3, 'y_offset': 0.3},
-            'uav3': {'z': 4.0, 'x_offset': 0.0, 'y_offset': 0.0}
+            'uav1': {'z': 4.0, 'x_offset': 0.0, 'y_offset': 0.0},
+            'uav2': {'z': 5.5, 'x_offset': 0.5, 'y_offset': 0.5},
+            'uav3': {'z': 7.0, 'x_offset': 1.0, 'y_offset': 1.0}
         }
         
         # Keep the Node Running
@@ -331,7 +331,7 @@ class MultiUAVCoordination:
         formation_angle = disc_heading  # Face directly toward disc
         
         # Calculate positions closer to the disc
-        advance_distance = 5.0  # Move 5 meters toward the disc
+        advance_distance = 0 # Move 5 meters toward the disc
         
         # Base position: move toward disc from detector position
         base_x = detector_gps_x + advance_distance * math.cos(disc_heading)
