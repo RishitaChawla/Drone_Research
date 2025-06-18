@@ -38,7 +38,7 @@ class MultiUAVCoordination:
         self.search_area_max_x = float(rospy.get_param("~search_area/max_x", 10.0))
         self.search_area_min_y = float(rospy.get_param("~search_area/min_y", -10.0))
         self.search_area_max_y = float(rospy.get_param("~search_area/max_y", 10.0))
-        self.min_point_distance = float(rospy.get_param("~min_point_distance", 25.0))
+        self.min_point_distance = float(rospy.get_param("~min_point_distance", 1.0))
         self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 25))
         self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)
         
@@ -145,8 +145,8 @@ class MultiUAVCoordination:
         # Formation positions based on UAV name (diagonal formation relative to detector)
         self.formation_positions = {
             'uav1': {'z': 4.0, 'x_offset': 0.0, 'y_offset': 0.0},
-            'uav2': {'z': 5.5, 'x_offset': 0.5, 'y_offset': 0.5},
-            'uav3': {'z': 7.0, 'x_offset': 1.0, 'y_offset': 1.0}
+            'uav2': {'z': 5.5, 'x_offset': 0.4, 'y_offset': 0.4},
+            'uav3': {'z': 7.0, 'x_offset': 0.8, 'y_offset': 0.8}
         }
         
         # Keep the Node Running
@@ -184,7 +184,7 @@ class MultiUAVCoordination:
     def generateRandomPoint(self):
         """Generate a random (x, y) point with better coverage distribution"""
         if self.grid_coverage_enabled:
-            return self.generateGridBasedPoint()
+            return self.generatePureRandomPoint()
         else:
             return self.generatePureRandomPoint()
     
