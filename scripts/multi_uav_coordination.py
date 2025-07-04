@@ -263,6 +263,72 @@ class MultiUAVCoordination:
         self.visited_points.append((x, y))
         rospy.logwarn(f'[RandomTrajectory-{self.uav_name}]: Generated point ({x:.1f}, {y:.1f}) after {max_attempts} attempts - may be closer than {self.min_point_distance}m')
         return x, y
+
+    def planSweepPath(self, step_size):
+        """Plan a sweeping pattern within assigned area bounds - horizontal sweeping (X to X)"""
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning horizontal sweeping path with step size {step_size}')
+        
+        path_msg = PathSrvRequest()
+        path_msg.path.header.frame_id = self.frame_id
+        path_msg.path.header.stamp = rospy.Time.now()
+        path_msg.path.fly_now = True
+        path_msg.path.use_heading = True
+        
+        # Use area bounds from launch file
+        area_width = self.search_area_max_x - self.search_area_min_x
+        area_height = self.search_area_max_y - self.search_area_min_y
+        
+        # Calculate number of horizontal sweep lines across the height (Y direction)
+        num_sweeps = max(2, int(area_height / step_size) + 1)
+        sweep_spacing = area_height / (num_sweeps - 1) if num_sweeps > 1 else area_height
+        
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Creating {num_sweeps} horizontal sweep lines across Y[{self.search_area_min_y}, {self.search_area_max_y}]')
+        
+        # Create back-and-forth horizontal sweeping pattern
+        for i in range(num_sweeps):
+            # Calculate Y position for this sweep line
+            if num_sweeps == 1:
+                y = (self.search_area_min_y + self.search_area_max_y) / 2.0
+            else:
+                y = self.search_area_min_y + (i * sweep_spacing)
+            
+            # Alternate sweep direction for back-and-forth pattern
+            if i % 2 == 0:
+                # Even sweeps: left to right
+                x_start = self.search_area_min_x
+                x_end = self.search_area_max_x
+            else:
+                # Odd sweeps: right to left
+                x_start = self.search_area_max_x
+                x_end = self.search_area_min_x
+            
+            # Add points along this horizontal sweep line
+            num_points_per_line = max(3, int(area_width / step_size) + 1)
+            
+            for j in range(num_points_per_line):
+                if num_points_per_line == 1:
+                    x = (x_start + x_end) / 2.0
+                else:
+                    x = x_start + (j / (num_points_per_line - 1)) * (x_end - x_start)
+                
+                # Create waypoint
+                point = Reference()
+                point.position.x = x
+                point.position.y = y
+                point.position.z = self.center_z  # Use assigned altitude
+                
+                # Calculate heading toward next point (along X direction)
+                if j < num_points_per_line - 1:
+                    next_x = x_start + ((j + 1) / (num_points_per_line - 1)) * (x_end - x_start)
+                    point.heading = math.atan2(0, next_x - x)  # Heading along X direction
+                else:
+                    point.heading = 0.0
+                
+                path_msg.path.points.append(point)
+        
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints for horizontal sweeping pattern')
+        return path_msg   
+    
     
     def planRandomTrajectory(self, radius_factor=1.0):
         """Plan a trajectory that maintains fixed altitudes - no initial ascent"""
@@ -310,6 +376,71 @@ class MultiUAVCoordination:
         rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints at fixed altitude {self.assigned_altitude}m')
         rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: X,Y coordinates vary randomly, Z stays constant')
         
+        return path_msg
+    
+
+        """Plan a sweeping pattern within assigned area bounds"""
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning sweeping path with step size {step_size}')
+        
+        path_msg = PathSrvRequest()
+        path_msg.path.header.frame_id = self.frame_id
+        path_msg.path.header.stamp = rospy.Time.now()
+        path_msg.path.fly_now = True
+        path_msg.path.use_heading = True
+        
+        # Use area bounds from launch file instead of dimensions
+        area_width = self.search_area_max_x - self.search_area_min_x
+        area_height = self.search_area_max_y - self.search_area_min_y
+        
+        # Calculate number of vertical sweep lines across the width
+        num_sweeps = max(2, int(area_width / step_size) + 1)
+        sweep_spacing = area_width / (num_sweeps - 1) if num_sweeps > 1 else area_width
+        
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Creating {num_sweeps} sweep lines across area [{self.search_area_min_x}, {self.search_area_max_x}]')
+        
+        # Create back-and-forth sweeping pattern
+        for i in range(num_sweeps):
+            # Calculate X position for this sweep line
+            if num_sweeps == 1:
+                x = (self.search_area_min_x + self.search_area_max_x) / 2.0
+            else:
+                x = self.search_area_min_x + (i * sweep_spacing)
+            
+            # Alternate sweep direction for back-and-forth pattern
+            if i % 2 == 0:
+                # Even sweeps: bottom to top
+                y_start = self.search_area_min_y
+                y_end = self.search_area_max_y
+            else:
+                # Odd sweeps: top to bottom  
+                y_start = self.search_area_max_y
+                y_end = self.search_area_min_y
+            
+            # Add points along this sweep line
+            num_points_per_line = max(3, int(area_height / step_size) + 1)
+            
+            for j in range(num_points_per_line):
+                if num_points_per_line == 1:
+                    y = (y_start + y_end) / 2.0
+                else:
+                    y = y_start + (j / (num_points_per_line - 1)) * (y_end - y_start)
+                
+                # Create waypoint
+                point = Reference()
+                point.position.x = x
+                point.position.y = y
+                point.position.z = self.center_z  # Use assigned altitude
+                
+                # Calculate heading toward next point
+                if j < num_points_per_line - 1:
+                    next_y = y_start + ((j + 1) / (num_points_per_line - 1)) * (y_end - y_start)
+                    point.heading = math.atan2(next_y - y, 0)  # Heading along Y direction
+                else:
+                    point.heading = 0.0
+                
+                path_msg.path.points.append(point)
+        
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints for sweeping pattern')
         return path_msg
     
     def planFormationTrajectory(self, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
@@ -467,7 +598,7 @@ class MultiUAVCoordination:
     
         # Only start trajectory if not in formation mode
         if not self.formation_active:
-            path_msg = self.planRandomTrajectory(param_value)
+            path_msg = self.planSweepPath(param_value)
             self.current_trajectory_active = True
     
             try:
