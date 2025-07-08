@@ -378,7 +378,7 @@ class MultiUAVCoordination:
         
         return path_msg
     
-
+    def planSweepPath(self, step_size):
         """Plan a sweeping pattern within assigned area bounds"""
         rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning sweeping path with step size {step_size}')
         
