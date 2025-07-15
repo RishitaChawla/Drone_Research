@@ -9,6 +9,9 @@ from mrs_msgs.msg import Reference
 from mrs_msgs.msg import UavStatusShort
 from std_msgs.msg import String
 from geometry_msgs.msg import Point
+from geometry_msgs.msg import QuaternionStamped
+from tf.transformations import euler_from_quaternion
+
 import cv2 # OpenCV library for computer vision
 from cv_bridge import CvBridge, CvBridgeError # Converts ROS Image messages and OpenCV format
 from sensor_msgs.msg import Image # ROS Message type for camera data
@@ -20,6 +23,7 @@ class MultiUAVCoordination:
         
         ## | --------------------- load parameters -------------------- |
         # Original trajectory parameters
+
         self.frame_id = rospy.get_param("~frame_id")
         self.center_x = float(rospy.get_param("~center/x"))
         self.center_y = float(rospy.get_param("~center/y"))
@@ -61,16 +65,18 @@ class MultiUAVCoordination:
         self.grid_sectors = []  # Track which grid sectors have been visited
         self.initialize_grid_sectors()
         
+
         # Get initial position from parameters
         self.initial_x = float(rospy.get_param("~initial_position/x", 0.0))
         self.initial_y = float(rospy.get_param("~initial_position/y", 0.0))
         
+        
         # GPS and heading state variables (UPDATED)
-        self.current_gps_x = self.initial_x      # Real-time X coordinate
-        self.current_gps_y = self.initial_y      # Real-time Y coordinate  
+        self.current_gps_x = self.initial_x          # Real-time X coordinate
+        self.current_gps_y = self.initial_y          # Real-time Y coordinate  
         self.current_gps_z = self.assigned_altitude  # Real-time Z coordinate
-        self.current_heading = 0.0               # Real-time heading (radians)
-        self.gps_data_received = False           # Flag to know if we have valid GPS data
+        self.current_heading = 0.0                   # Real-time heading (radians)
+        self.gps_data_received = False               # Flag to know if we have valid GPS data
         
         # Log that we're starting
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Node initialized at altitude {self.assigned_altitude}m')
@@ -113,6 +119,12 @@ class MultiUAVCoordination:
             String, 
             self.callbackDiscDetectionInfo
         )
+
+        self.sub_orientation = rospy.Subscriber(
+            "/" + self.uav_name + "/hw_api/orientation", 
+            QuaternionStamped,
+            self.callbackOrientation
+        )
         
         ## | -----------------------Publishers --------------------------|
         # Publisher for disc detection notifications with position info
@@ -141,6 +153,17 @@ class MultiUAVCoordination:
         self.formation_active = False
         self.current_uav_position = None
         self.disc_detection_heading = 0.0  # Direction the detecting drone was facing when it saw the disc
+        self.current_yaw = 0
+        self.current_pitch = 0
+        self.current_roll = 0
+        self.disc_coordinates_calculated = False
+
+        self.drone_stopped = False
+        self.disc_coordinates_calculated = False
+        self.stop_position_x = 0.0
+        self.stop_position_y = 0.0
+        self.stop_position_z = 0.0
+        self.stop_heading = 0.0
         
         # Formation positions based on UAV name (diagonal formation relative to detector)
         self.formation_positions = {
@@ -157,6 +180,7 @@ class MultiUAVCoordination:
     def initialize_grid_sectors(self):
         """Initialize grid sectors for better coverage distribution"""
         # Create a grid of sectors to ensure good coverage
+
         grid_size_x = 4  # Number of grid divisions in X
         grid_size_y = 4  # Number of grid divisions in Y
         
@@ -531,11 +555,12 @@ class MultiUAVCoordination:
         """Broadcast disc detection with current GPS coordinates and heading"""
         # Use current GPS position (updated by UAV status)
         detection_msg = f"DETECTED,{self.uav_name},{self.current_gps_x},{self.current_gps_y},{self.current_gps_z},{drone_heading}"
+
         
         msg = String()
         msg.data = detection_msg
         self.pub_disc_detection_info.publish(msg)
-        
+        rospy.loginfo(f'  Orientation: Yaw={self.current_yaw:.1f}°, Pitch={self.current_pitch:.1f}°, Roll={self.current_roll:.1f}°')
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Broadcasting disc detection at GPS ({self.current_gps_x:.1f}, {self.current_gps_y:.1f}, {self.current_gps_z:.1f}) heading {math.degrees(drone_heading):.1f}°')
     
     def activateFormation(self, detector_uav, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
@@ -558,8 +583,140 @@ class MultiUAVCoordination:
                 rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory failed: {response.message}')
         except Exception as e:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory service call failed: {e}')
+
     
+    def stopDrone(self):
+        """Simply stop the drone at current position"""
+        try:
+            # Store the stop position
+            self.stop_position_x = self.current_gps_x
+            self.stop_position_y = self.current_gps_y
+            self.stop_position_z = self.current_gps_z
+            self.stop_heading = math.radians(self.current_yaw)
+            
+            # Create path message to hold position
+            path_msg = PathSrvRequest()
+            path_msg.path.header.frame_id = self.frame_id
+            path_msg.path.header.stamp = rospy.Time.now()
+            path_msg.path.fly_now = True
+            path_msg.path.use_heading = True
+            
+            # Create waypoint at stop position
+            stop_point = Reference()
+            stop_point.position.x = self.stop_position_x
+            stop_point.position.y = self.stop_position_y
+            stop_point.position.z = self.stop_position_z
+            stop_point.heading = self.stop_heading
+            
+            path_msg.path.points.append(stop_point)
+            
+            # Send the hold position command ONCE
+            response = self.sc_path.call(path_msg)
+            
+            rospy.loginfo(f'[{self.uav_name}]: Drone stopped at ({self.stop_position_x:.2f}, {self.stop_position_y:.2f}, {self.stop_position_z:.2f})')
+            
+        except Exception as e:
+            rospy.logerr(f'[{self.uav_name}]: Error stopping drone: {str(e)}')
+
+    def calculateDistance(self, detected_x, detected_y, detected_w, detected_h):
+        """Calculate disc world coordinates using Option E (90° rotation)"""
+        
+        # Camera parameters
+        FOCAL_LENGTH_PIXELS = 924.27
+        REAL_DISC_DIAMETER_METERS = 0.31
+        IMAGE_WIDTH = 1280
+        IMAGE_HEIGHT = 720
+        CAMERA_PITCH_OFFSET_DEGREES = -45.0  # 45° down from horizontal
+        
+        try:
+            rospy.loginfo(f"[{self.uav_name}] ===== FINAL COORDINATE CALCULATION =====")
+            rospy.loginfo(f"[{self.uav_name}] Drone position: X={self.current_gps_x:.3f}, Y={self.current_gps_y:.3f}, Z={self.current_gps_z:.3f}")
+            rospy.loginfo(f"[{self.uav_name}] Drone orientation: Yaw={self.current_yaw:.2f}°, Pitch={self.current_pitch:.2f}°")
+            
+            # Calculate disc center in pixels
+            disc_center_x = detected_x + detected_w / 2.0
+            disc_center_y = detected_y + detected_h / 2.0
+            
+            # Calculate disc diameter and distance
+            disc_diameter_pixels = max(detected_w, detected_h)
+            distance_to_disc = (REAL_DISC_DIAMETER_METERS * FOCAL_LENGTH_PIXELS) / disc_diameter_pixels
+            
+            rospy.loginfo(f"[{self.uav_name}] Disc center: ({disc_center_x:.1f}, {disc_center_y:.1f}), diameter: {disc_diameter_pixels:.1f}px")
+            rospy.loginfo(f"[{self.uav_name}] Distance to disc: {distance_to_disc:.3f}m")
+            
+            # Calculate pixel offsets from optical center
+            optical_center_x = 640.5
+            optical_center_y = 360.5
+            
+            offset_x = disc_center_x - optical_center_x
+            offset_y = disc_center_y - optical_center_y
+            
+            # Convert pixel offsets to angular offsets
+            angle_x = math.atan(offset_x / FOCAL_LENGTH_PIXELS)
+            angle_y = math.atan(offset_y / FOCAL_LENGTH_PIXELS)
+            
+            # Calculate camera's actual pointing direction
+            total_camera_pitch = math.radians(self.current_pitch + CAMERA_PITCH_OFFSET_DEGREES)
+            drone_yaw = math.radians(self.current_yaw)
+            
+            # Calculate direction vector in camera frame
+            camera_x = math.sin(angle_x)
+            camera_y = math.sin(angle_y)
+            camera_z = math.cos(angle_x) * math.cos(angle_y)
+            
+            # Transform to world coordinates
+            # Apply pitch rotation
+            cos_pitch = math.cos(total_camera_pitch)
+            sin_pitch = math.sin(total_camera_pitch)
+            
+            world_x_intermediate = camera_x
+            world_y_intermediate = camera_y * cos_pitch - camera_z * sin_pitch
+            world_z_intermediate = camera_y * sin_pitch + camera_z * cos_pitch
+            
+            # Apply yaw rotation
+            cos_yaw = math.cos(drone_yaw)
+            sin_yaw = math.sin(drone_yaw)
+            
+            world_x = world_x_intermediate * cos_yaw - world_y_intermediate * sin_yaw
+            world_y = world_x_intermediate * sin_yaw + world_y_intermediate * cos_yaw
+            world_z = world_z_intermediate
+            
+            # Calculate ground intersection
+            if abs(world_z) < 0.001:
+                rospy.logwarn(f"[{self.uav_name}] Ray is nearly horizontal, using distance projection")
+                t = distance_to_disc
+            else:
+                t = -self.current_gps_z / world_z
+            
+            rospy.loginfo(f"[{self.uav_name}] Ground intersection parameter t = {t:.3f}")
+            
+            # OPTION E: 90° coordinate rotation (X becomes -Y, Y becomes +X)
+            self.disc_world_x = self.current_gps_x - t * world_y
+            self.disc_world_y = self.current_gps_y + t * world_x
+            self.disc_world_z = 0.0  # Ground level
+            
+            rospy.loginfo(f"[{self.uav_name}] FINAL DISC COORDINATES:")
+            rospy.loginfo(f"[{self.uav_name}] X: {self.disc_world_x:.3f} meters")
+            rospy.loginfo(f"[{self.uav_name}] Y: {self.disc_world_y:.3f} meters")
+            rospy.loginfo(f"[{self.uav_name}] Z: {self.disc_world_z:.3f} meters")
+            
+            # Calculate accuracy
+            actual_distance = math.sqrt(
+                (self.disc_world_x - self.current_gps_x)**2 + 
+                (self.disc_world_y - self.current_gps_y)**2 + 
+                (self.disc_world_z - self.current_gps_z)**2
+            )
+            rospy.loginfo(f"[{self.uav_name}] Distance to calculated position: {actual_distance:.3f}m")
+            rospy.loginfo(f"[{self.uav_name}] ==========================================")
+            
+            return True
+            
+        except Exception as e:
+            rospy.logerr(f"[{self.uav_name}] Error in coordinate calculation: {str(e)}")
+            return False
     # ------------------------------callbacks-------------------------------------------
+
+    
     
     def callbackUAVStatus(self, msg):
         """Update current GPS coordinates and heading from UAV status"""
@@ -631,10 +788,11 @@ class MultiUAVCoordination:
         except Exception as e:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing detection message: {e}')
     
+    # FIXED: Camera callback with proper flow
     def callbackCamera(self, data):
         """Process camera frames to detect discs"""
-        # Skip processing if we're already in formation mode
-        if self.formation_active:
+        # Skip processing if we're already in formation mode OR if coordinates already calculated
+        if self.formation_active or self.disc_coordinates_calculated:
             return
             
         try:
@@ -650,7 +808,7 @@ class MultiUAVCoordination:
                 cv2.rectangle(cv_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.circle(cv_image, (x + w//2, y + h//2), 5, (0, 0, 255), -1)
                 cv2.putText(cv_image, f"Disc ({x}, {y})", (x, y - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
                 # Count consecutive detections
                 self.detection_count += 1
@@ -659,54 +817,61 @@ class MultiUAVCoordination:
                 if self.detection_count >= self.detection_threshold and not self.disc_detected:
                     self.disc_detected = True
                     
-                    # Calculate heading towards the disc based on image position
-                    image_center_x = cv_image.shape[1] / 2
-                    disc_center_x = x + w/2
+                    rospy.loginfo(f'[{self.uav_name}]: DISC DETECTED! Stopping drone...')
                     
-                    # Simple heading calculation: disc position relative to image center
-                    angle_offset = (disc_center_x - image_center_x) / image_center_x * 0.5  # Max 0.5 radians offset
+                    # STEP 1: Stop the drone
+                    self.stopDrone()
+                    self.drone_stopped = True
                     
-                    # Ensure we have valid GPS data before proceeding
-                    if not self.gps_data_received:
-                        rospy.logwarn(f'[{self.uav_name}]: No GPS data received yet, using initial position')
-                        gps_x = self.initial_x
-                        gps_y = self.initial_y  
-                        gps_z = self.assigned_altitude
-                        current_drone_heading = 0.0
+                    # STEP 2: Calculate disc coordinates
+                    rospy.loginfo(f'[{self.uav_name}]: Calculating disc world coordinates...')
+                    
+                    if self.calculateDistance(x, y, w, h):
+                        self.disc_coordinates_calculated = True
+                        
+                        # STEP 3: Report the coordinates - DO NOT PROCEED TO FORMATION
+                        rospy.loginfo(f'[{self.uav_name}]: ===== DISC COORDINATE CALCULATION COMPLETE =====')
+                        rospy.loginfo(f'[{self.uav_name}]: Disc World Coordinates:')
+                        rospy.loginfo(f'[{self.uav_name}]: X: {self.disc_world_x:.3f} meters')
+                        rospy.loginfo(f'[{self.uav_name}]: Y: {self.disc_world_y:.3f} meters') 
+                        rospy.loginfo(f'[{self.uav_name}]: Z: {self.disc_world_z:.3f} meters')
+                        rospy.loginfo(f'[{self.uav_name}]: ================================================')
+                        
+                        # Calculate distance for verification
+                        distance_to_disc = math.sqrt(
+                            (self.disc_world_x - self.current_gps_x)**2 + 
+                            (self.disc_world_y - self.current_gps_y)**2 + 
+                            (self.disc_world_z - self.current_gps_z)**2
+                        )
+                        rospy.loginfo(f'[{self.uav_name}]: Distance to disc: {distance_to_disc:.3f} meters')
+                        
+                        # STOP HERE - NO FORMATION CALL
+                        rospy.loginfo(f'[{self.uav_name}]: Drone will remain stopped. Coordinate calculation complete.')
+                        
                     else:
-                        # Use real-time GPS coordinates and heading
-                        gps_x = self.current_gps_x
-                        gps_y = self.current_gps_y
-                        gps_z = self.current_gps_z
-                        current_drone_heading = self.current_heading
-                    
-                    # Calculate heading towards the disc using real drone heading
-                    disc_heading = current_drone_heading + angle_offset
-                    
-                    rospy.loginfo(f'[{self.uav_name}]: DISC DETECTED!')
-                    rospy.loginfo(f'[{self.uav_name}]: GPS Position: ({gps_x:.2f}, {gps_y:.2f}, {gps_z:.2f})')
-                    rospy.loginfo(f'[{self.uav_name}]: Drone heading: {math.degrees(current_drone_heading):.1f}°, Disc direction: {math.degrees(disc_heading):.1f}°')
-                    
-                    # Broadcast detection with real GPS and heading
-                    self.broadcastDiscDetection(x, y, disc_heading)
-                    self.activateFormation(self.uav_name, gps_x, gps_y, gps_z, disc_heading)
+                        rospy.logwarn(f'[{self.uav_name}]: Failed to calculate disc coordinates, retrying...')
+                        # Reset to try again
+                        self.disc_detected = False
+                        self.drone_stopped = False
+                        self.detection_count = 0
             else:
                 # Reset detection counter if no disc is found
                 self.detection_count = 0
             
-            # Add status text with altitude and formation info
-            if self.formation_active:
-                if self.disc_detector_uav == self.uav_name:
-                    status = "FORMATION LEADER"
-                else:
-                    status = f"FORMATION WITH {self.disc_detector_uav}"
+            # Add status text
+            if self.disc_coordinates_calculated:
+                status = "COORDINATES CALCULATED - STOPPED"
+            elif self.drone_stopped and not self.disc_coordinates_calculated:
+                status = "CALCULATING DISC POSITION"
+            elif self.disc_detected:
+                status = "DISC DETECTED - STOPPING"
             else:
-                status = "DISC DETECTED" if self.disc_detected else "RANDOM SEARCH"
+                status = "RANDOM SEARCH"
                 
             cv2.putText(cv_image, f"UAV: {self.uav_name} - {status}", (10, 30),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.putText(cv_image, f"Altitude: {self.current_gps_z:.1f}m | GPS: ({self.current_gps_x:.1f}, {self.current_gps_y:.1f}) | Hdg: {math.degrees(self.current_heading):.0f}°", (10, 60),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
             
             # Publish visualization
             viz_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
@@ -714,7 +879,44 @@ class MultiUAVCoordination:
             
         except CvBridgeError as e:
             rospy.logerr(f"[RandomTrajectory-{self.uav_name}]: {e}")
+        
 
+    def callbackOrientation(self, data):
+        try:
+            # Debug: Check message structure (optional)
+            rospy.loginfo_once(f"Message type: {type(data)}")
+            
+            # Extract quaternion
+            self.q_x = data.quaternion.x
+            self.q_y = data.quaternion.y
+            self.q_z = data.quaternion.z
+            self.q_w = data.quaternion.w
+
+            # Optional: Normalize quaternion
+            #norm = math.sqrt(self.q_x**2 + self.q_y**2 + self.q_z**2 + self.q_w**2)
+            #if abs(norm - 1.0) > 0.001:
+                #self.q_x /= norm
+                #self.q_y /= norm
+                #self.q_z /= norm
+                #self.q_w /= norm
+
+            # Convert to Euler angles
+            
+            quat_list = [self.q_x, self.q_y, self.q_z, self.q_w]
+            (roll, pitch, yaw) = euler_from_quaternion(quat_list)
+            
+            # Convert to degrees
+            self.current_roll = math.degrees(roll)
+            self.current_pitch = math.degrees(pitch)
+            self.current_yaw = math.degrees(yaw)
+
+            rospy.loginfo(f"[{self.uav_name}]: Roll: {self.current_roll:.2f}°, Pitch: {self.current_pitch:.2f}°, Yaw: {self.current_yaw:.2f}°")
+
+        except Exception as e:
+            rospy.logerr(f"[{self.uav_name}]: Error in orientation callback: {str(e)}")
+            # rospy.logerr(f"Data received: {data}")  # Debug: Print raw data
+
+    
 if __name__ == '__main__':
     try:
         node = MultiUAVCoordination()
