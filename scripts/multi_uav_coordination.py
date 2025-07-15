@@ -11,7 +11,6 @@ from std_msgs.msg import String
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import QuaternionStamped
 from tf.transformations import euler_from_quaternion
-
 import cv2 # OpenCV library for computer vision
 from cv_bridge import CvBridge, CvBridgeError # Converts ROS Image messages and OpenCV format
 from sensor_msgs.msg import Image # ROS Message type for camera data
@@ -23,7 +22,6 @@ class MultiUAVCoordination:
         
         ## | --------------------- load parameters -------------------- |
         # Original trajectory parameters
-
         self.frame_id = rospy.get_param("~frame_id")
         self.center_x = float(rospy.get_param("~center/x"))
         self.center_y = float(rospy.get_param("~center/y"))
@@ -46,13 +44,20 @@ class MultiUAVCoordination:
         self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 25))
         self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)
         
-        # UAV altitude assignment
+        # UAV altitude assignment for search phase
         self.altitude_map = {
             "uav1": 3.0,
             "uav2": 6.0,
             "uav3": 9.0
         }
         self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)  # Default to 6.0 if UAV name not found
+        
+        # NEW: Vertical formation parameters with same offsets as your original formation
+        self.vertical_formation_positions = {
+            'uav1': {'z': 3.0, 'x_offset': 0.0, 'y_offset': 0.0},  # Bottom
+            'uav2': {'z': 6.0, 'x_offset': 0.4, 'y_offset': 0.4},  # Middle 
+            'uav3': {'z': 9.0, 'x_offset': 0.8, 'y_offset': 0.8}   # Top
+        }
         
         # Formation parameters
         self.formation_offset = rospy.get_param("~formation_offset", 2.0)
@@ -65,7 +70,6 @@ class MultiUAVCoordination:
         self.grid_sectors = []  # Track which grid sectors have been visited
         self.initialize_grid_sectors()
         
-
         # Get initial position from parameters
         self.initial_x = float(rospy.get_param("~initial_position/x", 0.0))
         self.initial_y = float(rospy.get_param("~initial_position/y", 0.0))
@@ -103,23 +107,22 @@ class MultiUAVCoordination:
             self.callbackUAVStatus
         )
         
-        # Subscribe to disc detection messages from other UAVs
-        self.sub_disc_detection_uav1 = rospy.Subscriber(
-            "/uav1/disc_detection_info", 
+        # Subscribe to disc coordinate messages from other UAVs (UPDATED)
+        self.sub_disc_coordinates_uav1 = rospy.Subscriber(
+            "/uav1/disc_coordinates", 
             String, 
-            self.callbackDiscDetectionInfo
+            self.callbackDiscCoordinates
         )
-        self.sub_disc_detection_uav2 = rospy.Subscriber(
-            "/uav2/disc_detection_info", 
+        self.sub_disc_coordinates_uav2 = rospy.Subscriber(
+            "/uav2/disc_coordinates", 
             String, 
-            self.callbackDiscDetectionInfo
+            self.callbackDiscCoordinates
         )
-        self.sub_disc_detection_uav3 = rospy.Subscriber(
-            "/uav3/disc_detection_info", 
+        self.sub_disc_coordinates_uav3 = rospy.Subscriber(
+            "/uav3/disc_coordinates", 
             String, 
-            self.callbackDiscDetectionInfo
+            self.callbackDiscCoordinates
         )
-
         self.sub_orientation = rospy.Subscriber(
             "/" + self.uav_name + "/hw_api/orientation", 
             QuaternionStamped,
@@ -127,9 +130,9 @@ class MultiUAVCoordination:
         )
         
         ## | -----------------------Publishers --------------------------|
-        # Publisher for disc detection notifications with position info
-        self.pub_disc_detection_info = rospy.Publisher(
-            "/"+self.uav_name+"/disc_detection_info", 
+        # NEW: Publisher for disc coordinates (replaces detection info)
+        self.pub_disc_coordinates = rospy.Publisher(
+            "/"+self.uav_name+"/disc_coordinates", 
             String, 
             queue_size=10
         )
@@ -157,20 +160,17 @@ class MultiUAVCoordination:
         self.current_pitch = 0
         self.current_roll = 0
         self.disc_coordinates_calculated = False
-
         self.drone_stopped = False
-        self.disc_coordinates_calculated = False
         self.stop_position_x = 0.0
         self.stop_position_y = 0.0
         self.stop_position_z = 0.0
         self.stop_heading = 0.0
         
-        # Formation positions based on UAV name (diagonal formation relative to detector)
-        self.formation_positions = {
-            'uav1': {'z': 3.0, 'x_offset': 0.0, 'y_offset': 0.0},
-            'uav2': {'z': 6.0, 'x_offset': 0.4, 'y_offset': 0.4},
-            'uav3': {'z': 9.0, 'x_offset': 0.8, 'y_offset': 0.8}
-        }
+        # NEW: Disc world coordinates
+        self.disc_world_x = 0.0
+        self.disc_world_y = 0.0 
+        self.disc_world_z = 0.0
+        self.coordinates_broadcast = False  # Track if we've sent coordinates
         
         # Keep the Node Running
         rospy.spin()
@@ -180,7 +180,6 @@ class MultiUAVCoordination:
     def initialize_grid_sectors(self):
         """Initialize grid sectors for better coverage distribution"""
         # Create a grid of sectors to ensure good coverage
-
         grid_size_x = 4  # Number of grid divisions in X
         grid_size_y = 4  # Number of grid divisions in Y
         
@@ -402,112 +401,33 @@ class MultiUAVCoordination:
         
         return path_msg
     
-    def planSweepPath(self, step_size):
-        """Plan a sweeping pattern within assigned area bounds"""
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning sweeping path with step size {step_size}')
-        
+    # NEW: Vertical formation planning with same offsets as original formation
+    def planVerticalFormationTrajectory(self, disc_world_x, disc_world_y, disc_world_z):
+        """Plan trajectory to vertical formation position around the disc coordinates"""
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
         
-        # Use area bounds from launch file instead of dimensions
-        area_width = self.search_area_max_x - self.search_area_min_x
-        area_height = self.search_area_max_y - self.search_area_min_y
+        # Get vertical formation position for this UAV
+        formation_info = self.vertical_formation_positions[self.uav_name]
         
-        # Calculate number of vertical sweep lines across the width
-        num_sweeps = max(2, int(area_width / step_size) + 1)
-        sweep_spacing = area_width / (num_sweeps - 1) if num_sweeps > 1 else area_width
+        # Calculate formation position directly above the disc with original offsets
+        formation_x = disc_world_x + formation_info['x_offset']
+        formation_y = disc_world_y + formation_info['y_offset']
+        formation_z = formation_info['z']  # Maintain vertical stacking
         
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Creating {num_sweeps} sweep lines across area [{self.search_area_min_x}, {self.search_area_max_x}]')
-        
-        # Create back-and-forth sweeping pattern
-        for i in range(num_sweeps):
-            # Calculate X position for this sweep line
-            if num_sweeps == 1:
-                x = (self.search_area_min_x + self.search_area_max_x) / 2.0
-            else:
-                x = self.search_area_min_x + (i * sweep_spacing)
-            
-            # Alternate sweep direction for back-and-forth pattern
-            if i % 2 == 0:
-                # Even sweeps: bottom to top
-                y_start = self.search_area_min_y
-                y_end = self.search_area_max_y
-            else:
-                # Odd sweeps: top to bottom  
-                y_start = self.search_area_max_y
-                y_end = self.search_area_min_y
-            
-            # Add points along this sweep line
-            num_points_per_line = max(3, int(area_height / step_size) + 1)
-            
-            for j in range(num_points_per_line):
-                if num_points_per_line == 1:
-                    y = (y_start + y_end) / 2.0
-                else:
-                    y = y_start + (j / (num_points_per_line - 1)) * (y_end - y_start)
-                
-                # Create waypoint
-                point = Reference()
-                point.position.x = x
-                point.position.y = y
-                point.position.z = self.center_z  # Use assigned altitude
-                
-                # Calculate heading toward next point
-                if j < num_points_per_line - 1:
-                    next_y = y_start + ((j + 1) / (num_points_per_line - 1)) * (y_end - y_start)
-                    point.heading = math.atan2(next_y - y, 0)  # Heading along Y direction
-                else:
-                    point.heading = 0.0
-                
-                path_msg.path.points.append(point)
-        
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints for sweeping pattern')
-        return path_msg
-    
-    def planFormationTrajectory(self, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
-        """Plan trajectory to formation position around the detector's GPS coordinates"""
-        path_msg = PathSrvRequest()
-        path_msg.path.header.frame_id = self.frame_id
-        path_msg.path.header.stamp = rospy.Time.now()
-        path_msg.path.fly_now = True
-        path_msg.path.use_heading = True
-        
-        # Get formation position for this UAV
-        formation_info = self.formation_positions[self.uav_name]
-        
-        # Calculate formation offset relative to disc direction
-        offset_x = formation_info['x_offset']
-        offset_y = formation_info['y_offset']
-        
-        # FIXED: Move formation TOWARD the disc direction (not away from it)
-        formation_angle = disc_heading  # Face directly toward disc
-        
-        # Calculate positions closer to the disc
-        advance_distance = 0 # Move 5 meters toward the disc
-        
-        # Base position: move toward disc from detector position
-        base_x = detector_gps_x + advance_distance * math.cos(disc_heading)
-        base_y = detector_gps_y + advance_distance * math.sin(disc_heading)
-        
-        # Apply formation offsets perpendicular to disc direction
-        perpendicular_angle = disc_heading + math.pi/2  # 90 degrees perpendicular
-        
-        formation_x = base_x + offset_x * math.cos(perpendicular_angle)
-        formation_y = base_y + offset_y * math.sin(perpendicular_angle)
-        
-        # Create waypoint to the formation position
+        # Create waypoint to the vertical formation position
         point = Reference()
         point.position.x = formation_x
         point.position.y = formation_y
-        point.position.z = formation_info['z']
-        point.heading = disc_heading  # All drones face toward disc
+        point.position.z = formation_z
+        point.heading = 0.0  # Face forward or maintain current heading
         
         path_msg.path.points.append(point)
         
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_info["z"]:.1f}) facing {math.degrees(disc_heading):.1f}°')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}) above disc')
         
         return path_msg
     
@@ -551,39 +471,40 @@ class MultiUAVCoordination:
         
         return False, 0, 0, 0, 0
     
-    def broadcastDiscDetection(self, detection_x, detection_y, drone_heading):
-        """Broadcast disc detection with current GPS coordinates and heading"""
-        # Use current GPS position (updated by UAV status)
-        detection_msg = f"DETECTED,{self.uav_name},{self.current_gps_x},{self.current_gps_y},{self.current_gps_z},{drone_heading}"
-
-        
-        msg = String()
-        msg.data = detection_msg
-        self.pub_disc_detection_info.publish(msg)
-        rospy.loginfo(f'  Orientation: Yaw={self.current_yaw:.1f}°, Pitch={self.current_pitch:.1f}°, Roll={self.current_roll:.1f}°')
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Broadcasting disc detection at GPS ({self.current_gps_x:.1f}, {self.current_gps_y:.1f}, {self.current_gps_z:.1f}) heading {math.degrees(drone_heading):.1f}°')
+    # NEW: Broadcast disc coordinates instead of just detection
+    def broadcastDiscCoordinates(self):
+        """Broadcast calculated disc world coordinates to other UAVs"""
+        if not self.coordinates_broadcast and self.disc_coordinates_calculated:
+            # Format: COORDINATES,uav_name,disc_x,disc_y,disc_z
+            coordinates_msg = f"COORDINATES,{self.uav_name},{self.disc_world_x},{self.disc_world_y},{self.disc_world_z}"
+            
+            msg = String()
+            msg.data = coordinates_msg
+            self.pub_disc_coordinates.publish(msg)
+            
+            self.coordinates_broadcast = True
+            
+            rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Broadcasting disc coordinates: ({self.disc_world_x:.3f}, {self.disc_world_y:.3f}, {self.disc_world_z:.3f})')
     
-    def activateFormation(self, detector_uav, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading):
-        """Activate formation mode and move to formation position relative to detector GPS"""
+    # NEW: Activate vertical formation mode
+    def activateVerticalFormation(self, disc_world_x, disc_world_y, disc_world_z, detector_uav):
+        """Activate vertical formation mode and move to formation position above disc"""
         self.formation_active = True
         self.disc_detector_uav = detector_uav
-        self.target_position = (detector_gps_x, detector_gps_y, detector_gps_z)
-        self.disc_detection_heading = disc_heading
         
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Activating formation mode. Detector GPS: ({detector_gps_x:.1f}, {detector_gps_y:.1f}, {detector_gps_z:.1f}), Disc heading: {math.degrees(disc_heading):.1f}°')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Activating vertical formation mode. Disc coordinates: ({disc_world_x:.1f}, {disc_world_y:.1f}, {disc_world_z:.1f}) from {detector_uav}')
         
-        # Plan and execute formation trajectory
-        formation_path = self.planFormationTrajectory(detector_gps_x, detector_gps_y, detector_gps_z, disc_heading)
+        # Plan and execute vertical formation trajectory
+        formation_path = self.planVerticalFormationTrajectory(disc_world_x, disc_world_y, disc_world_z)
         
         try:
             response = self.sc_path.call(formation_path)
             if response.success:
-                rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory sent successfully')
+                rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Vertical formation trajectory sent successfully')
             else:
                 rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory failed: {response.message}')
         except Exception as e:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Formation trajectory service call failed: {e}')
-
     
     def stopDrone(self):
         """Simply stop the drone at current position"""
@@ -714,9 +635,8 @@ class MultiUAVCoordination:
         except Exception as e:
             rospy.logerr(f"[{self.uav_name}] Error in coordinate calculation: {str(e)}")
             return False
-    # ------------------------------callbacks-------------------------------------------
-
     
+    # ------------------------------callbacks-------------------------------------------
     
     def callbackUAVStatus(self, msg):
         """Update current GPS coordinates and heading from UAV status"""
@@ -745,7 +665,7 @@ class MultiUAVCoordination:
             rospy.logerr(f'[{self.uav_name}]: Error processing UAV status: {e}')
     
     def callbackStart(self, req):
-        """Start the random trajectory"""
+        """Start the trajectory based on trajectory_type parameter"""
         if not self.is_initialized:
             return Vec1Response(False, "not initialized")
     
@@ -755,40 +675,53 @@ class MultiUAVCoordination:
     
         # Only start trajectory if not in formation mode
         if not self.formation_active:
-            path_msg = self.planSweepPath(param_value)
+            # Choose trajectory type based on parameter
+            if self.trajectory_type == "sweep":
+                path_msg = self.planSweepPath(param_value)
+                trajectory_name = "sweep"
+            elif self.trajectory_type == "random":
+                path_msg = self.planRandomTrajectory(param_value)
+                trajectory_name = "random"
+            else:
+                # Default to sweep if unknown type
+                path_msg = self.planSweepPath(param_value)
+                trajectory_name = "sweep (default)"
+            
             self.current_trajectory_active = True
     
             try:
                 response = self.sc_path.call(path_msg)
                 if response.success:
-                    rospy.loginfo(f'[RandomTrajectory-{self.uav_name}]: Started random trajectory with {self.num_trajectory_points} points')
+                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Started {trajectory_name} trajectory')
                 return Vec1Response(response.success, response.message)
             except Exception as e:
-                rospy.logerr(f'[RandomTrajectory-{self.uav_name}]: Service call failed: {e}')
+                rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Service call failed: {e}')
                 return Vec1Response(False, "service call failed")
         else:
             return Vec1Response(True, "In formation mode, ignoring trajectory start")
     
-    def callbackDiscDetectionInfo(self, msg):
-        """Handle disc detection messages from other UAVs with GPS coordinates and heading"""
+    # NEW: Handle disc coordinate messages from other UAVs
+    def callbackDiscCoordinates(self, msg):
+        """Handle disc coordinate messages from other UAVs"""
         try:
             parts = msg.data.split(',')
-            if len(parts) >= 6 and parts[0] == "DETECTED":
+            if len(parts) >= 5 and parts[0] == "COORDINATES":
                 detector_uav = parts[1]
-                detector_gps_x = float(parts[2])
-                detector_gps_y = float(parts[3])
-                detector_gps_z = float(parts[4])
-                disc_heading = float(parts[5])
+                disc_world_x = float(parts[2])
+                disc_world_y = float(parts[3])
+                disc_world_z = float(parts[4])
                 
-                # If this UAV hasn't detected the disc itself and isn't already in formation
+                # Only respond if this UAV hasn't detected the disc itself and isn't already in formation
                 if not self.disc_detected and not self.formation_active:
-                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc detection from {detector_uav} at GPS ({detector_gps_x:.1f}, {detector_gps_y:.1f}, {detector_gps_z:.1f})')
-                    self.activateFormation(detector_uav, detector_gps_x, detector_gps_y, detector_gps_z, disc_heading)
+                    rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc coordinates from {detector_uav}: ({disc_world_x:.3f}, {disc_world_y:.3f}, {disc_world_z:.3f})')
+                    
+                    # Activate vertical formation mode
+                    self.activateVerticalFormation(disc_world_x, disc_world_y, disc_world_z, detector_uav)
                     
         except Exception as e:
-            rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing detection message: {e}')
+            rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing coordinate message: {e}')
     
-    # FIXED: Camera callback with proper flow
+    # UPDATED: Camera callback with coordinate broadcasting
     def callbackCamera(self, data):
         """Process camera frames to detect discs"""
         # Skip processing if we're already in formation mode OR if coordinates already calculated
@@ -829,7 +762,7 @@ class MultiUAVCoordination:
                     if self.calculateDistance(x, y, w, h):
                         self.disc_coordinates_calculated = True
                         
-                        # STEP 3: Report the coordinates - DO NOT PROCEED TO FORMATION
+                        # STEP 3: Report the coordinates
                         rospy.loginfo(f'[{self.uav_name}]: ===== DISC COORDINATE CALCULATION COMPLETE =====')
                         rospy.loginfo(f'[{self.uav_name}]: Disc World Coordinates:')
                         rospy.loginfo(f'[{self.uav_name}]: X: {self.disc_world_x:.3f} meters')
@@ -845,8 +778,13 @@ class MultiUAVCoordination:
                         )
                         rospy.loginfo(f'[{self.uav_name}]: Distance to disc: {distance_to_disc:.3f} meters')
                         
-                        # STOP HERE - NO FORMATION CALL
-                        rospy.loginfo(f'[{self.uav_name}]: Drone will remain stopped. Coordinate calculation complete.')
+                        # STEP 4: Broadcast coordinates to other drones
+                        rospy.loginfo(f'[{self.uav_name}]: Broadcasting coordinates to other drones...')
+                        self.broadcastDiscCoordinates()
+                        
+                        # STEP 5: Move to formation position
+                        rospy.loginfo(f'[{self.uav_name}]: Moving to vertical formation position...')
+                        self.activateVerticalFormation(self.disc_world_x, self.disc_world_y, self.disc_world_z, self.uav_name)
                         
                     else:
                         rospy.logwarn(f'[{self.uav_name}]: Failed to calculate disc coordinates, retrying...')
@@ -859,8 +797,10 @@ class MultiUAVCoordination:
                 self.detection_count = 0
             
             # Add status text
-            if self.disc_coordinates_calculated:
-                status = "COORDINATES CALCULATED - STOPPED"
+            if self.formation_active:
+                status = "IN VERTICAL FORMATION"
+            elif self.disc_coordinates_calculated:
+                status = "COORDINATES SENT - MOVING TO FORMATION"
             elif self.drone_stopped and not self.disc_coordinates_calculated:
                 status = "CALCULATING DISC POSITION"
             elif self.disc_detected:
@@ -880,7 +820,6 @@ class MultiUAVCoordination:
         except CvBridgeError as e:
             rospy.logerr(f"[RandomTrajectory-{self.uav_name}]: {e}")
         
-
     def callbackOrientation(self, data):
         try:
             # Debug: Check message structure (optional)
@@ -891,17 +830,8 @@ class MultiUAVCoordination:
             self.q_y = data.quaternion.y
             self.q_z = data.quaternion.z
             self.q_w = data.quaternion.w
-
-            # Optional: Normalize quaternion
-            #norm = math.sqrt(self.q_x**2 + self.q_y**2 + self.q_z**2 + self.q_w**2)
-            #if abs(norm - 1.0) > 0.001:
-                #self.q_x /= norm
-                #self.q_y /= norm
-                #self.q_z /= norm
-                #self.q_w /= norm
-
-            # Convert to Euler angles
             
+            # Convert to Euler angles
             quat_list = [self.q_x, self.q_y, self.q_z, self.q_w]
             (roll, pitch, yaw) = euler_from_quaternion(quat_list)
             
@@ -909,13 +839,18 @@ class MultiUAVCoordination:
             self.current_roll = math.degrees(roll)
             self.current_pitch = math.degrees(pitch)
             self.current_yaw = math.degrees(yaw)
-
-            rospy.loginfo(f"[{self.uav_name}]: Roll: {self.current_roll:.2f}°, Pitch: {self.current_pitch:.2f}°, Yaw: {self.current_yaw:.2f}°")
-
+            
+            # Log occasionally to reduce spam
+            if hasattr(self, '_last_orientation_log'):
+                current_time = rospy.Time.now()
+                if (current_time - self._last_orientation_log).to_sec() > 5.0:  # Log every 5 seconds
+                    rospy.loginfo(f"[{self.uav_name}]: Roll: {self.current_roll:.2f}°, Pitch: {self.current_pitch:.2f}°, Yaw: {self.current_yaw:.2f}°")
+                    self._last_orientation_log = current_time
+            else:
+                self._last_orientation_log = rospy.Time.now()
+                
         except Exception as e:
             rospy.logerr(f"[{self.uav_name}]: Error in orientation callback: {str(e)}")
-            # rospy.logerr(f"Data received: {data}")  # Debug: Print raw data
-
     
 if __name__ == '__main__':
     try:
