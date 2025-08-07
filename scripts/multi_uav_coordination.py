@@ -50,13 +50,13 @@ class MultiUAVCoordination:
             "uav2": 6.0,
             "uav3": 9.0
         }
-        self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)  # Default to 6.0 if UAV name not found
+        self.assigned_altitude = 6.0
         
         # NEW: Vertical formation parameters with same offsets as your original formation
         self.vertical_formation_positions = {
-            'uav1': {'z': 6.0, 'x_offset': -2, 'y_offset': -4},  # Bottom
-            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': 0},  # Middle 
-            'uav3': {'z': 9.0, 'x_offset': 2, 'y_offset': -4}   # Top
+            'uav1': {'z': 3.0, 'x_offset': -2, 'y_offset': -4}, 
+            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': -2},  
+            'uav3': {'z': 3.0, 'x_offset': 2, 'y_offset': -4} 
         }
         
         # Formation parameters
@@ -428,6 +428,9 @@ class MultiUAVCoordination:
         path_msg.path.points.append(point)
         
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}) above disc')
+
+        
+            
         
         return path_msg
     
