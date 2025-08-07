@@ -54,9 +54,9 @@ class MultiUAVCoordination:
         
         # NEW: Vertical formation parameters with same offsets as your original formation
         self.vertical_formation_positions = {
-            'uav1': {'z': 3.0, 'x_offset': 0.0, 'y_offset': 0.0},  # Bottom
-            'uav2': {'z': 6.0, 'x_offset': 0.4, 'y_offset': 0.4},  # Middle 
-            'uav3': {'z': 9.0, 'x_offset': 0.8, 'y_offset': 0.8}   # Top
+            'uav1': {'z': 6.0, 'x_offset': -2, 'y_offset': -4},  # Bottom
+            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': 0},  # Middle 
+            'uav3': {'z': 9.0, 'x_offset': 2, 'y_offset': -4}   # Top
         }
         
         # Formation parameters
@@ -288,8 +288,8 @@ class MultiUAVCoordination:
         return x, y
 
     def planSweepPath(self, step_size):
-        """Plan a sweeping pattern within assigned area bounds - horizontal sweeping (X to X)"""
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning horizontal sweeping path with step size {step_size}')
+        """Plan a sweeping pattern within assigned area bounds - vertical sweeping (Y to Y)"""
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Planning vertical sweeping path with step size {step_size}')
         
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
@@ -301,38 +301,38 @@ class MultiUAVCoordination:
         area_width = self.search_area_max_x - self.search_area_min_x
         area_height = self.search_area_max_y - self.search_area_min_y
         
-        # Calculate number of horizontal sweep lines across the height (Y direction)
-        num_sweeps = max(2, int(area_height / step_size) + 1)
-        sweep_spacing = area_height / (num_sweeps - 1) if num_sweeps > 1 else area_height
+        # Calculate number of vertical sweep lines across the width (X direction)
+        num_sweeps = max(2, int(area_width / step_size) + 1)
+        sweep_spacing = area_width / (num_sweeps - 1) if num_sweeps > 1 else area_width
         
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Creating {num_sweeps} horizontal sweep lines across Y[{self.search_area_min_y}, {self.search_area_max_y}]')
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Creating {num_sweeps} vertical sweep lines across X[{self.search_area_min_x}, {self.search_area_max_x}]')
         
-        # Create back-and-forth horizontal sweeping pattern
+        # Create back-and-forth vertical sweeping pattern
         for i in range(num_sweeps):
-            # Calculate Y position for this sweep line
+            # Calculate X position for this sweep line
             if num_sweeps == 1:
-                y = (self.search_area_min_y + self.search_area_max_y) / 2.0
+                x = (self.search_area_min_x + self.search_area_max_x) / 2.0
             else:
-                y = self.search_area_min_y + (i * sweep_spacing)
+                x = self.search_area_min_x + (i * sweep_spacing)
             
             # Alternate sweep direction for back-and-forth pattern
             if i % 2 == 0:
-                # Even sweeps: left to right
-                x_start = self.search_area_min_x
-                x_end = self.search_area_max_x
+                # Even sweeps: front to back
+                y_start = self.search_area_min_y
+                y_end = self.search_area_max_y
             else:
-                # Odd sweeps: right to left
-                x_start = self.search_area_max_x
-                x_end = self.search_area_min_x
+                # Odd sweeps: back to front
+                y_start = self.search_area_max_y
+                y_end = self.search_area_min_y
             
-            # Add points along this horizontal sweep line
-            num_points_per_line = max(3, int(area_width / step_size) + 1)
+            # Add points along this vertical sweep line
+            num_points_per_line = max(3, int(area_height / step_size) + 1)
             
             for j in range(num_points_per_line):
                 if num_points_per_line == 1:
-                    x = (x_start + x_end) / 2.0
+                    y = (y_start + y_end) / 2.0
                 else:
-                    x = x_start + (j / (num_points_per_line - 1)) * (x_end - x_start)
+                    y = y_start + (j / (num_points_per_line - 1)) * (y_end - y_start)
                 
                 # Create waypoint
                 point = Reference()
@@ -340,17 +340,17 @@ class MultiUAVCoordination:
                 point.position.y = y
                 point.position.z = self.center_z  # Use assigned altitude
                 
-                # Calculate heading toward next point (along X direction)
+                # Calculate heading toward next point (along Y direction)
                 if j < num_points_per_line - 1:
-                    next_x = x_start + ((j + 1) / (num_points_per_line - 1)) * (x_end - x_start)
-                    point.heading = math.atan2(0, next_x - x)  # Heading along X direction
+                    next_y = y_start + ((j + 1) / (num_points_per_line - 1)) * (y_end - y_start)
+                    point.heading = math.atan2(next_y - y, 0)  # Heading along Y direction
                 else:
                     point.heading = 0.0
                 
                 path_msg.path.points.append(point)
         
-        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints for horizontal sweeping pattern')
-        return path_msg   
+        rospy.loginfo(f'[SweepingGenerator-{self.uav_name}]: Generated {len(path_msg.path.points)} waypoints for vertical sweeping pattern')
+        return path_msg  
     
     
     def planRandomTrajectory(self, radius_factor=1.0):
@@ -415,7 +415,7 @@ class MultiUAVCoordination:
         
         # Calculate formation position directly above the disc with original offsets
         formation_x = disc_world_x + formation_info['x_offset']
-        formation_y = disc_world_y + formation_info['y_offset']
+        formation_y = (disc_world_y) + formation_info['y_offset']
         formation_z = formation_info['z']  # Maintain vertical stacking
         
         # Create waypoint to the vertical formation position
@@ -430,6 +430,60 @@ class MultiUAVCoordination:
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}) above disc')
         
         return path_msg
+    
+    def planCircularFormationTrajectory(self, predicted_disc_x, predicted_disc_y, predicted_disc_z):
+        """
+        Plan trajectory to circular formation position around PREDICTED disc coordinates
+        with error compensation through larger formation radius and search patterns
+        """
+        path_msg = PathSrvRequest()
+        path_msg.path.header.frame_id = self.frame_id
+        path_msg.path.header.stamp = rospy.Time.now()
+        path_msg.path.fly_now = True
+        path_msg.path.use_heading = True
+        
+        # Enhanced formation parameters to handle prediction errors
+        base_formation_radius = 0.5  # Larger radius to account for prediction error
+        altitude_assignments = {
+            'uav1': 6.0,  # Lower altitude for better detection
+            'uav2': 3.0,  # Medium altitude 
+            'uav3': 9.0   # Higher altitude for overview
+        }
+        
+        # Circular positioning - each drone gets a different angle
+        angle_assignments = {
+            'uav1': 0,      # 0 degrees (East of predicted position)
+            'uav2': 120,    # 120 degrees (Northwest)
+            'uav3': 240     # 240 degrees (Southwest)
+        }
+        
+        # Get this drone's assignment
+        formation_angle = math.radians(angle_assignments[self.uav_name])
+        formation_altitude = altitude_assignments[self.uav_name]
+        
+        # Calculate base formation position around predicted coordinates
+        base_x = predicted_disc_x + base_formation_radius * math.cos(formation_angle)
+        base_y = predicted_disc_y + base_formation_radius * math.sin(formation_angle)
+        
+        # ERROR COMPENSATION STRATEGY: Add multiple waypoints in a search pattern
+        # This creates a "search circle" around the predicted position
+        
+        search_waypoints = []
+        
+        # 1. Primary position (closest to predicted location)
+        primary_point = Reference()
+        primary_point.position.x = base_x
+        primary_point.position.y = base_y
+        primary_point.position.z = formation_altitude
+        primary_point.heading = math.atan2(predicted_disc_y - base_y, predicted_disc_x - base_x)  # Face towards predicted disc
+        search_waypoints.append(primary_point)
+        
+        
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning circular formation at angle {angle_assignments[self.uav_name]}° around predicted disc ({predicted_disc_x:.1f}, {predicted_disc_y:.1f})')
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Primary position: ({base_x:.1f}, {base_y:.1f}, {formation_altitude:.1f}) with {len(search_waypoints)} search waypoints')
+        
+        return path_msg
+
     
     def detectDisc(self, image):
         """Detect gray disc with shape and size filtering to avoid detecting drones"""
@@ -487,7 +541,7 @@ class MultiUAVCoordination:
             rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Broadcasting disc coordinates: ({self.disc_world_x:.3f}, {self.disc_world_y:.3f}, {self.disc_world_z:.3f})')
     
     # NEW: Activate vertical formation mode
-    def activateVerticalFormation(self, disc_world_x, disc_world_y, disc_world_z, detector_uav):
+    def activateCircularFormation(self, disc_world_x, disc_world_y, disc_world_z, detector_uav):
         """Activate vertical formation mode and move to formation position above disc"""
         self.formation_active = True
         self.disc_detector_uav = detector_uav
@@ -540,7 +594,6 @@ class MultiUAVCoordination:
             rospy.logerr(f'[{self.uav_name}]: Error stopping drone: {str(e)}')
 
     def calculateDistance(self, detected_x, detected_y, detected_w, detected_h):
-        """Calculate disc world coordinates using Option E (90° rotation)"""
         
         # Camera parameters
         FOCAL_LENGTH_PIXELS = 924.27
@@ -680,7 +733,7 @@ class MultiUAVCoordination:
                 path_msg = self.planSweepPath(param_value)
                 trajectory_name = "sweep"
             elif self.trajectory_type == "random":
-                path_msg = self.planRandomTrajectory(param_value)
+                path_msg = self.planSweepPath(param_value)
                 trajectory_name = "random"
             else:
                 # Default to sweep if unknown type
@@ -716,7 +769,7 @@ class MultiUAVCoordination:
                     rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Received disc coordinates from {detector_uav}: ({disc_world_x:.3f}, {disc_world_y:.3f}, {disc_world_z:.3f})')
                     
                     # Activate vertical formation mode
-                    self.activateVerticalFormation(disc_world_x, disc_world_y, disc_world_z, detector_uav)
+                    self.activateCircularFormation(disc_world_x, disc_world_y, disc_world_z, detector_uav)
                     
         except Exception as e:
             rospy.logerr(f'[MultiUAVCoordination-{self.uav_name}]: Error parsing coordinate message: {e}')
@@ -784,7 +837,7 @@ class MultiUAVCoordination:
                         
                         # STEP 5: Move to formation position
                         rospy.loginfo(f'[{self.uav_name}]: Moving to vertical formation position...')
-                        self.activateVerticalFormation(self.disc_world_x, self.disc_world_y, self.disc_world_z, self.uav_name)
+                        self.activateCircularFormation(self.disc_world_x, self.disc_world_y, self.disc_world_z, self.uav_name)
                         
                     else:
                         rospy.logwarn(f'[{self.uav_name}]: Failed to calculate disc coordinates, retrying...')
