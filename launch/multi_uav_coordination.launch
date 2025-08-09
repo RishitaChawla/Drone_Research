@@ -8,7 +8,7 @@
       <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
       
       <!-- Random trajectory parameters -->
-      <param name="trajectory_type" value="random" />
+      <param name="trajectory_type" value="sweep" />
       <param name="center/x" value="0.0" />
       <param name="center/y" value="0.0" />
       <param name="center/z" value="6.0" />  <!-- UAV1 altitude -->
@@ -19,7 +19,7 @@
       <param name="initial_position/x" value="0.0" />
       <param name="initial_position/y" value="0.0" />
       
-      <!-- Random search area parameters -->
+      <!--  Sweep search area parameters -->
       <param name="search_area/min_x" value = "-4.0" />
       <param name="search_area/max_x" value = "4.0" />
       <param name="search_area/min_y" value = "-12.0" />
@@ -55,7 +55,7 @@
       <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
       
       <!-- Random trajectory parameters -->
-      <param name="trajectory_type" value="random" />
+      <param name="trajectory_type" value="sweep" />
       <param name="center/x" value="-15.0" />
       <param name="center/y" value="15.0" />
       <param name="center/z" value="6.0" />  <!-- UAV2 altitude -->
@@ -66,7 +66,7 @@
       <param name="initial_position/x" value="-15.0" />
       <param name="initial_position/y" value="15.0" />
       
-      <!-- Random search area parameters -->
+      <!-- Sweep search area parameters -->
       <param name="search_area/min_x" value="-12.0" />
       <param name="search_area/max_x" value="-4.6" />
       <param name="search_area/min_y" value="-12.0" />
@@ -105,7 +105,7 @@
       <rosparam file="$(find example_multi_uav_coordination)/config/sweeping_generator.yaml" />
       
       <!-- Random trajectory parameters -->
-      <param name="trajectory_type" value="random" />
+      <param name="trajectory_type" value="sweep" />
       <param name="center/x" value="15.0" />
       <param name="center/y" value="-15.0" />
       <param name="center/z" value="6.0" />  <!-- UAV3 altitude -->
@@ -116,7 +116,7 @@
       <param name="initial_position/x" value="15.0" />
       <param name="initial_position/y" value="-15.0" />
       
-      <!-- Random search area parameters -->
+      <!-- Sweep search area parameters -->
       <param name="search_area/min_x" value = "4.6" />
       <param name="search_area/max_x" value = "12.0" />
       <param name="search_area/min_y" value = "-12.0" />
