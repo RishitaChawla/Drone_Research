@@ -41,7 +41,7 @@ class MultiUAVCoordination:
         self.min_point_distance = float(rospy.get_param("~min_point_distance", 10.0))
         self.num_trajectory_points = int(rospy.get_param("~num_trajectory_points", 25))
         self.grid_coverage_enabled = rospy.get_param("~grid_coverage_enabled", False)
-        
+
         # UAV altitude assignment for search phase
         self.altitude_map = {
             "uav1": 3.0,
@@ -53,7 +53,7 @@ class MultiUAVCoordination:
         # Vertical formation parameters with same offsets as your original formation
         self.vertical_formation_positions = {
             'uav1': {'z': 6.0, 'x_offset': -2, 'y_offset': -4},  # Bottom
-            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': 0},  # Middle 
+            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': -2},  # Middle 
             'uav3': {'z': 9.0, 'x_offset': 2, 'y_offset': -4}   # Top
         }
         
@@ -70,7 +70,7 @@ class MultiUAVCoordination:
         self.initial_y = float(rospy.get_param("~initial_position/y", 0.0))
         
         
-        # GPS and heading state variables (UPDATED)
+        # GPS and heading state variables 
         self.current_gps_x = self.initial_x          # Real-time X coordinate
         self.current_gps_y = self.initial_y          # Real-time Y coordinate  
         self.current_gps_z = self.assigned_altitude  # Real-time Z coordinate
@@ -160,7 +160,14 @@ class MultiUAVCoordination:
         self.stop_position_y = 0.0
         self.stop_position_z = 0.0
         self.stop_heading = 0.0
-        
+
+
+        self.formation_x_confirmed = 0
+        self.formation_y_confirmed = 0
+        self.formation_z_confirmed = 0
+        self.descent_initiated = False
+        self.formation_done = False
+
         # Disc world coordinates
         self.disc_world_x = 0.0
         self.disc_world_y = 0.0 
@@ -404,6 +411,7 @@ class MultiUAVCoordination:
         path_msg.path.header.stamp = rospy.Time.now()
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
+        self.formation_active = True
         
         # Get vertical formation position for this UAV
         formation_info = self.vertical_formation_positions[self.uav_name]
@@ -419,6 +427,10 @@ class MultiUAVCoordination:
         point.position.y = formation_y
         point.position.z = formation_z
         point.heading = 0.0  # Face forward or maintain current heading
+
+        self.formation_x_confirmed = formation_x
+        self.formation_y_confirmed = formation_y
+        self.formation_z_confirmed = formation_z
         
         path_msg.path.points.append(point)
         
@@ -632,7 +644,35 @@ class MultiUAVCoordination:
         except Exception as e:
             rospy.logerr(f"[{self.uav_name}] Error in coordinate calculation: {str(e)}")
             return False
-    
+
+    def planDescent(self, formation_x, formation_y, formation_z):
+
+        """ Plan descent trajectory points """
+        path_msg = PathSrvRequest()
+        path_msg.path.header.frame_id = self.frame_id
+        path_msg.path.header.stamp = rospy.Time.now()
+        path_msg.path.fly_now = True
+        path_msg.path.use_heading = True
+        self.formation_active = True
+        
+        # Calculate formation position directly above the disc with original offsets
+        formation_x = self.formation_x_confirmed
+        formation_y = self.formation_y_confirmed
+        formation_z = 1.5
+        
+        # Create waypoint to the vertical formation position
+        point = Reference()
+        point.position.x = formation_x
+        point.position.y = formation_y
+        point.position.z = formation_z
+        point.heading = 0.0  # Face forward or maintain current heading
+
+        path_msg.path.points.append(point)
+        
+        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning descent at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f})')
+        
+        return path_msg
+
     # ------------------------------callbacks-------------------------------------------
     
     def callbackUAVStatus(self, msg):
@@ -657,7 +697,21 @@ class MultiUAVCoordination:
                     self._last_log_time = current_time
             else:
                 self._last_log_time = rospy.Time.now()
+
+            if(abs(self.current_gps_x - self.formation_x_confirmed) < 0.5):
+                if(abs(self.current_gps_y - self.formation_y_confirmed) < 0.5):
+                    if(abs(self.current_gps_z - self.formation_z_confirmed) < 0.5):
+                        self.formation_done = True
+                        
+            
+            if(self.formation_done and not self.descent_initiated):
+                self.descent_initiated = True  # Prevent multiple executions
+                formation_path = self.planDescent(self.formation_x_confirmed, self.formation_y_confirmed, self.formation_z_confirmed)
+                response = self.sc_path.call(formation_path)
+                rospy.loginfo(f"{self.uav_name}: Descent coordinates sent to the topic")
+
                 
+
         except Exception as e:
             rospy.logerr(f'[{self.uav_name}]: Error processing UAV status: {e}')
     
