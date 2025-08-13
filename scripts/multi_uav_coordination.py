@@ -658,14 +658,20 @@ class MultiUAVCoordination:
         # Calculate formation position directly above the disc with original offsets
         formation_x = self.formation_x_confirmed
         formation_y = self.formation_y_confirmed
-        formation_z = 1.5
+        formation_z = 2.5
         
         # Create waypoint to the vertical formation position
         point = Reference()
         point.position.x = formation_x
         point.position.y = formation_y
         point.position.z = formation_z
-        point.heading = 0.0  # Face forward or maintain current heading
+
+        if(self.uav_name == "uav2"):
+            point.heading = 1.48353
+        elif(self.uav_name == "uav1"):
+            point.heading = 2.96706
+        else:
+            point.heading = 0 
 
         path_msg.path.points.append(point)
         
@@ -698,10 +704,8 @@ class MultiUAVCoordination:
             else:
                 self._last_log_time = rospy.Time.now()
 
-            if(abs(self.current_gps_x - self.formation_x_confirmed) < 0.5):
-                if(abs(self.current_gps_y - self.formation_y_confirmed) < 0.5):
-                    if(abs(self.current_gps_z - self.formation_z_confirmed) < 0.5):
-                        self.formation_done = True
+            if(abs(self.current_gps_x - self.formation_x_confirmed) < 0.5) and (abs(self.current_gps_y - self.formation_y_confirmed) < 0.5) and (abs(self.current_gps_z - self.formation_z_confirmed) < 0.5):
+                self.formation_done = True
                         
             
             if(self.formation_done and not self.descent_initiated):
