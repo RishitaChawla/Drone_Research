@@ -1,9 +1,10 @@
+#!/usr/bin/env python3
 from lxml import etree
 import random
 
 # File paths
 file_path = "/home/rchawla/catkin_ws/src/worlds/scripts/charlotteCopy.world"
-output_file = 'home/rchawla/opt/ros/noetic/share/mrs_gazebo_common_resources/worlds/charlotte.world'
+output_file = '/opt/ros/noetic/share/mrs_gazebo_common_resources/worlds/charlotte.world'
 
 # Define the range for randomization
 x_range = (-8, 8)
@@ -64,7 +65,7 @@ model_template = '''
     <visual name='visual'>
       <geometry>
         <mesh>
-          <uri>model://disk_part/meshes/disk.dae</uri>
+          <uri>file:///home/rchawla/gazebo_models/disk_part/meshes/disk.dae</uri>
         </mesh>
       </geometry>
       <material>

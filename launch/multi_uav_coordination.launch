@@ -210,5 +210,10 @@
       <param name="port" value="17001"/>
     </node>
   </group>
+
+   <node pkg="example_multi_uav_coordination"
+        type="Random_object_Placement.py"
+        name="random_object_placement"
+        output="screen"/>
   
 </launch>

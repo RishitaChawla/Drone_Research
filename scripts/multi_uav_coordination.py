@@ -557,7 +557,7 @@ class MultiUAVCoordination:
         REAL_DISC_DIAMETER_METERS = 0.31
         OPTICAL_CENTER_X = 640.5
         OPTICAL_CENTER_Y = 360.5
-        CAMERA_PITCH_OFFSET = math.radians(-178.0)  # 45° down from horizontal
+        CAMERA_PITCH_OFFSET = math.radians(-178)  
         
         try:
             # 1. Calculate disc center in image coordinates
@@ -581,13 +581,29 @@ class MultiUAVCoordination:
             body_y = camera_dir[1] * pitch_cos - camera_dir[2] * pitch_sin
             body_z = camera_dir[1] * pitch_sin + camera_dir[2] * pitch_cos
             
-            # 5. Transform to world frame (PROPER YAW ROTATION - FIXED)
+            # 5. Transform to world frame - MULTIPLE VARIANTS TO TRY
             yaw_rad = math.radians(self.current_yaw)
             
-            # CORRECTED: Rotate body vector by drone yaw (rotation about Z-axis)
-            world_x = body_x * math.cos(yaw_rad) - body_y * math.sin(yaw_rad)
-            world_y = body_x * math.sin(yaw_rad) + body_y * math.cos(yaw_rad)
+            # VARIANT 1: Your current implementation
+            # world_x = body_x * math.cos(yaw_rad) - body_y * math.sin(yaw_rad)
+            # world_y = body_x * math.sin(yaw_rad) + body_y * math.cos(yaw_rad)
+            # world_z = body_z
+            
+            # VARIANT 2: Try this if your current doesn't work
+            world_x = body_x * math.cos(yaw_rad) + body_y * math.sin(yaw_rad)
+            world_y = -body_x * math.sin(yaw_rad) + body_y * math.cos(yaw_rad)
             world_z = body_z
+            
+            # VARIANT 3: If using NED coordinate system
+            # world_x = body_y * math.cos(yaw_rad) - body_x * math.sin(yaw_rad)  # North
+            # world_y = body_y * math.sin(yaw_rad) + body_x * math.cos(yaw_rad)  # East
+            # world_z = body_z
+            
+            # VARIANT 4: With yaw offset (if 0° isn't aligned with your world X-axis)
+            # yaw_corrected = yaw_rad + math.radians(90)  # Adjust offset as needed
+            # world_x = body_x * math.cos(yaw_corrected) - body_y * math.sin(yaw_corrected)
+            # world_y = body_x * math.sin(yaw_corrected) + body_y * math.cos(yaw_corrected)
+            # world_z = body_z
             
             # 6. Find intersection with ground plane (Z=0)
             if abs(world_z) < 1e-6:
@@ -596,12 +612,17 @@ class MultiUAVCoordination:
                 
             t = -self.current_gps_z / world_z
             
-            # 7. Calculate world coordinates (NO ARTIFICIAL 90° ROTATION)
+            # 7. Calculate world coordinates
             self.disc_world_x = self.current_gps_x + t * world_x
             self.disc_world_y = self.current_gps_y + t * world_y
             self.disc_world_z = 0.0
             
-            rospy.loginfo(f"Corrected World Coordinates: X={self.disc_world_x:.3f}, Y={self.disc_world_y:.3f}")
+            # Debug logging - KEEP THIS TO DIAGNOSE THE ISSUE
+            rospy.loginfo(f"Heading: {self.current_yaw:.1f}°")
+            rospy.loginfo(f"Body vector: [{body_x:.3f}, {body_y:.3f}, {body_z:.3f}]")
+            rospy.loginfo(f"World vector: [{world_x:.3f}, {world_y:.3f}, {world_z:.3f}]")
+            rospy.loginfo(f"World Coordinates: X={self.disc_world_x:.3f}, Y={self.disc_world_y:.3f}")
+            
             return True
             
         except Exception as e:
