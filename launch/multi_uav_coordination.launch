@@ -22,7 +22,7 @@
       <!--  Sweep search area parameters -->
       <param name="search_area/min_x" value = "-4.0" />
       <param name="search_area/max_x" value = "4.0" />
-      <param name="search_area/min_y" value = "-21.0" />
+      <param name="search_area/min_y" value = "-12.0" />
       <param name="search_area/max_y" value = "23.0" />
       <param name="min_point_distance" value = "1.0" />
       <param name="num_trajectory_points" value = "25" />
@@ -69,7 +69,7 @@
       <!-- Sweep search area parameters -->
       <param name="search_area/min_x" value="-12.0" />
       <param name="search_area/max_x" value="-4.6" />
-      <param name="search_area/min_y" value="-21.0" />
+      <param name="search_area/min_y" value="-12.0" />
       <param name="search_area/max_y" value="23.0" />
       <param name="min_point_distance" value="1.0" />
       <param name="num_trajectory_points" value="25" />
@@ -119,7 +119,7 @@
       <!-- Sweep search area parameters -->
       <param name="search_area/min_x" value = "4.6" />
       <param name="search_area/max_x" value = "12.0" />
-      <param name="search_area/min_y" value = "-21.0" />
+      <param name="search_area/min_y" value = "-12.0" />
       <param name="search_area/max_y" value = "23.0" />
       <param name="min_point_distance" value ="1.0" />
       <param name="num_trajectory_points" value = "25" />
@@ -210,10 +210,5 @@
       <param name="port" value="17001"/>
     </node>
   </group>
-
-   <node pkg="example_multi_uav_coordination"
-        type="Random_object_Placement.py"
-        name="random_object_placement"
-        output="screen"/>
   
 </launch>

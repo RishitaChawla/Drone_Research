@@ -550,87 +550,103 @@ class MultiUAVCoordination:
             rospy.logerr(f'[{self.uav_name}]: Error stopping drone: {str(e)}')
 
     def calculateDistance(self, detected_x, detected_y, detected_w, detected_h):
-        """Fixed coordinate calculation for drones with different headings"""
         
         # Camera parameters
         FOCAL_LENGTH_PIXELS = 924.27
         REAL_DISC_DIAMETER_METERS = 0.31
-        OPTICAL_CENTER_X = 640.5
-        OPTICAL_CENTER_Y = 360.5
-        CAMERA_PITCH_OFFSET = math.radians(-178)  
+        IMAGE_WIDTH = 1280
+        IMAGE_HEIGHT = 720
+        CAMERA_PITCH_OFFSET_DEGREES = -45.0  # 45° down from horizontal
         
         try:
-            # 1. Calculate disc center in image coordinates
-            disc_center_x = detected_x + detected_w/2.0
-            disc_center_y = detected_y + detected_h/2.0
+            rospy.loginfo(f"[{self.uav_name}] ===== FINAL COORDINATE CALCULATION =====")
+            rospy.loginfo(f"[{self.uav_name}] Drone position: X={self.current_gps_x:.3f}, Y={self.current_gps_y:.3f}, Z={self.current_gps_z:.3f}")
+            rospy.loginfo(f"[{self.uav_name}] Drone orientation: Yaw={self.current_yaw:.2f}°, Pitch={self.current_pitch:.2f}°")
             
-            # 2. Convert to normalized camera coordinates
-            x_cam = (disc_center_x - OPTICAL_CENTER_X) / FOCAL_LENGTH_PIXELS
-            y_cam = (disc_center_y - OPTICAL_CENTER_Y) / FOCAL_LENGTH_PIXELS
+            # Calculate disc center in pixels
+            disc_center_x = detected_x + detected_w / 2.0
+            disc_center_y = detected_y + detected_h / 2.0
             
-            # 3. Create direction vector in camera frame (Z-forward, X-right, Y-down)
-            camera_dir = np.array([x_cam, y_cam, 1.0])
-            camera_dir /= np.linalg.norm(camera_dir)
+            # Calculate disc diameter and distance
+            disc_diameter_pixels = max(detected_w, detected_h)
+            distance_to_disc = (REAL_DISC_DIAMETER_METERS * FOCAL_LENGTH_PIXELS) / disc_diameter_pixels
             
-            # 4. Transform to drone body frame (account for camera mounting)
-            # Camera is pitched down 45 degrees (rotation about X-axis)
-            pitch_cos = math.cos(CAMERA_PITCH_OFFSET)
-            pitch_sin = math.sin(CAMERA_PITCH_OFFSET)
+            rospy.loginfo(f"[{self.uav_name}] Disc center: ({disc_center_x:.1f}, {disc_center_y:.1f}), diameter: {disc_diameter_pixels:.1f}px")
+            rospy.loginfo(f"[{self.uav_name}] Distance to disc: {distance_to_disc:.3f}m")
             
-            body_x = camera_dir[0]  # X unchanged
-            body_y = camera_dir[1] * pitch_cos - camera_dir[2] * pitch_sin
-            body_z = camera_dir[1] * pitch_sin + camera_dir[2] * pitch_cos
+            # Calculate pixel offsets from optical center
+            optical_center_x = 640.5
+            optical_center_y = 360.5
             
-            # 5. Transform to world frame - MULTIPLE VARIANTS TO TRY
-            yaw_rad = math.radians(self.current_yaw)
+            offset_x = disc_center_x - optical_center_x
+            offset_y = disc_center_y - optical_center_y
             
-            # VARIANT 1: Your current implementation
-            # world_x = body_x * math.cos(yaw_rad) - body_y * math.sin(yaw_rad)
-            # world_y = body_x * math.sin(yaw_rad) + body_y * math.cos(yaw_rad)
-            # world_z = body_z
+            # Convert pixel offsets to angular offsets
+            angle_x = math.atan(offset_x / FOCAL_LENGTH_PIXELS)
+            angle_y = math.atan(offset_y / FOCAL_LENGTH_PIXELS)
             
-            # VARIANT 2: Try this if your current doesn't work
-            world_x = body_x * math.cos(yaw_rad) + body_y * math.sin(yaw_rad)
-            world_y = -body_x * math.sin(yaw_rad) + body_y * math.cos(yaw_rad)
-            world_z = body_z
+            # Calculate camera's actual pointing direction
+            total_camera_pitch = math.radians(self.current_pitch + CAMERA_PITCH_OFFSET_DEGREES)
+            drone_yaw = math.radians(self.current_yaw)
             
-            # VARIANT 3: If using NED coordinate system
-            # world_x = body_y * math.cos(yaw_rad) - body_x * math.sin(yaw_rad)  # North
-            # world_y = body_y * math.sin(yaw_rad) + body_x * math.cos(yaw_rad)  # East
-            # world_z = body_z
+            # Calculate direction vector in camera frame
+            camera_x = math.sin(angle_x)
+            camera_y = math.sin(angle_y)
+            camera_z = math.cos(angle_x) * math.cos(angle_y)
             
-            # VARIANT 4: With yaw offset (if 0° isn't aligned with your world X-axis)
-            # yaw_corrected = yaw_rad + math.radians(90)  # Adjust offset as needed
-            # world_x = body_x * math.cos(yaw_corrected) - body_y * math.sin(yaw_corrected)
-            # world_y = body_x * math.sin(yaw_corrected) + body_y * math.cos(yaw_corrected)
-            # world_z = body_z
+            # Transform to world coordinates
+            # Apply pitch rotation
+            cos_pitch = math.cos(total_camera_pitch)
+            sin_pitch = math.sin(total_camera_pitch)
             
-            # 6. Find intersection with ground plane (Z=0)
-            if abs(world_z) < 1e-6:
-                rospy.logwarn("Ray parallel to ground plane")
-                return False
-                
-            t = -self.current_gps_z / world_z
+            world_x_intermediate = camera_x
+            world_y_intermediate = camera_y * cos_pitch - camera_z * sin_pitch
+            world_z_intermediate = camera_y * sin_pitch + camera_z * cos_pitch
             
-            # 7. Calculate world coordinates
-            self.disc_world_x = self.current_gps_x + t * world_x
-            self.disc_world_y = self.current_gps_y + t * world_y
-            self.disc_world_z = 0.0
+            # Apply yaw rotation
+            cos_yaw = math.cos(drone_yaw)
+            sin_yaw = math.sin(drone_yaw)
             
-            # Debug logging - KEEP THIS TO DIAGNOSE THE ISSUE
-            rospy.loginfo(f"Heading: {self.current_yaw:.1f}°")
-            rospy.loginfo(f"Body vector: [{body_x:.3f}, {body_y:.3f}, {body_z:.3f}]")
-            rospy.loginfo(f"World vector: [{world_x:.3f}, {world_y:.3f}, {world_z:.3f}]")
-            rospy.loginfo(f"World Coordinates: X={self.disc_world_x:.3f}, Y={self.disc_world_y:.3f}")
+            world_x = world_x_intermediate * cos_yaw - world_y_intermediate * sin_yaw
+            world_y = world_x_intermediate * sin_yaw + world_y_intermediate * cos_yaw
+            world_z = world_z_intermediate
+            
+            # Calculate ground intersection
+            if abs(world_z) < 0.001:
+                rospy.logwarn(f"[{self.uav_name}] Ray is nearly horizontal, using distance projection")
+                t = distance_to_disc
+            else:
+                t = -self.current_gps_z / world_z
+            
+            rospy.loginfo(f"[{self.uav_name}] Ground intersection parameter t = {t:.3f}")
+            
+            # OPTION E: 90° coordinate rotation (X becomes -Y, Y becomes +X)
+            self.disc_world_x = self.current_gps_x - t * world_y
+            self.disc_world_y = self.current_gps_y + t * world_x
+            self.disc_world_z = 0.0  # Ground level
+            
+            rospy.loginfo(f"[{self.uav_name}] FINAL DISC COORDINATES:")
+            rospy.loginfo(f"[{self.uav_name}] X: {self.disc_world_x:.3f} meters")
+            rospy.loginfo(f"[{self.uav_name}] Y: {self.disc_world_y:.3f} meters")
+            rospy.loginfo(f"[{self.uav_name}] Z: {self.disc_world_z:.3f} meters")
+            
+            # Calculate accuracy
+            actual_distance = math.sqrt(
+                (self.disc_world_x - self.current_gps_x)**2 + 
+                (self.disc_world_y - self.current_gps_y)**2 + 
+                (self.disc_world_z - self.current_gps_z)**2
+            )
+            rospy.loginfo(f"[{self.uav_name}] Distance to calculated position: {actual_distance:.3f}m")
+            rospy.loginfo(f"[{self.uav_name}] ==========================================")
             
             return True
             
         except Exception as e:
-            rospy.logerr(f"Calculation error: {str(e)}")
+            rospy.logerr(f"[{self.uav_name}] Error in coordinate calculation: {str(e)}")
             return False
 
-    def planDescent(self, formation_x, formation_y, formation_z):
 
+    def planDescent(self, formation_x, formation_y, formation_z):
         """ Plan descent trajectory points """
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
@@ -639,30 +655,54 @@ class MultiUAVCoordination:
         path_msg.path.use_heading = True
         self.formation_active = True
         
-        # Calculate formation position directly above the disc with original offsets
         formation_x = self.formation_x_confirmed
         formation_y = self.formation_y_confirmed
         formation_z = 2.5
         
-        # Create waypoint to the vertical formation position
         point = Reference()
         point.position.x = formation_x
         point.position.y = formation_y
         point.position.z = formation_z
+        
+        # Calculate the UAV's position relative to disc center
+        dx = self.current_gps_x - formation_x  # UAV position relative to disc
+        dy = self.current_gps_y - formation_y
+        
+        # Calculate which "sector" the UAV is in around the disc
+        angle_from_disc = math.atan2(dy, dx)  # UAV's position angle around disc
+        
+        # Convert to degrees for easier understanding
+        angle_degrees = math.degrees(angle_from_disc)
+        if angle_degrees < 0:
+            angle_degrees += 360
+        
+        # Assign headings based on UAV position around disc
+        if 315 <= angle_degrees or angle_degrees < 45:  
+            point.heading = math.radians(180) 
+        elif 45 <= angle_degrees < 135:  
+            point.heading = math.radians(270)  
+        elif 135 <= angle_degrees < 225:  
+            point.heading = math.radians(0)    
+        else:  # Bottom side (270°±45°)
+            point.heading = math.radians(90)   
+        
+    
 
-        if(self.uav_name == "uav2"):
-            point.heading = 1.48353
-        elif(self.uav_name == "uav1"):
-            point.heading = 2.96706
-        else:
-            point.heading = 0 
-
+        if self.uav_name == "uav1":
+            point.heading = math.radians(170)
+        elif self.uav_name == "uav2":
+            point.heading = math.radians(90)
+        elif self.uav_name == "uav3":
+            point.heading = math.radians(0)
+        
+        rospy.loginfo(f'[{self.uav_name}] Position angle: {angle_degrees:.1f}°')
+        rospy.loginfo(f'[{self.uav_name}] Assigned heading: {math.degrees(point.heading):.1f}°')
+        
         path_msg.path.points.append(point)
         
         rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning descent at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f})')
         
         return path_msg
-
     # ------------------------------callbacks-------------------------------------------
     
     def callbackUAVStatus(self, msg):

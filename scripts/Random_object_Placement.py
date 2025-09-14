@@ -4,7 +4,7 @@ import random
 
 # File paths
 file_path = "/home/rchawla/catkin_ws/src/worlds/scripts/charlotteCopy.world"
-output_file = '/opt/ros/noetic/share/mrs_gazebo_common_resources/worlds/charlotte.world'
+output_file = '/opt/ros/noetic/share/mrs_gazebo_common_resources/worlds/grass_plane.world'
 
 # Define the range for randomization
 x_range = (-8, 8)
@@ -85,11 +85,11 @@ model_template = '''
 '''
 
 # Find the world element to append new models
-world = root.find("world")
+world = root.find(".//world")
 
 # Add or update models based on user input
 for i in range(1, number_tyres + 1):
-    model_name = f"car_wheel{i}"
+    model_name = f"disk_part{i}"
     # Check if the model already exists
     existing_model = world.find(f".//model[@name='{model_name}']")
     if not existing_model:
