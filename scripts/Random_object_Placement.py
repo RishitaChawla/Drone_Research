@@ -7,8 +7,8 @@ file_path = "/home/rchawla/catkin_ws/src/worlds/scripts/charlotteCopy.world"
 output_file = '/opt/ros/noetic/share/mrs_gazebo_common_resources/worlds/grass_plane.world'
 
 # Define the range for randomization
-x_range = (-8, 8)
-y_range = (-8, 8)
+x_range = (-6, 6)
+y_range = (0, 8)
 
 # Function to generate random positions
 def generate_random_pose():

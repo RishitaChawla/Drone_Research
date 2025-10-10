@@ -20,7 +20,7 @@ class MultiUAVCoordination:
         rospy.init_node("multi_uav_coordination", anonymous = True)
         self.uav_name = rospy.get_namespace().strip('/')
         
-        ## | --------------------- load parameters -------------------- |
+        ## |--------------------- load parameters --------------------|
         # Original trajectory parameters
         self.frame_id = rospy.get_param("~frame_id")
         self.center_x = float(rospy.get_param("~center/x"))
@@ -51,12 +51,14 @@ class MultiUAVCoordination:
         self.assigned_altitude = self.altitude_map.get(self.uav_name, 6.0)  # Default to 6.0 if UAV name not found
         
         # Vertical formation parameters with same offsets as your original formation
-        self.vertical_formation_positions = {
-            'uav1': {'z': 6.0, 'x_offset': -2, 'y_offset': -4},  # Bottom
-            'uav2': {'z': 3.0, 'x_offset': 0, 'y_offset': -2},  # Middle 
-            'uav3': {'z': 9.0, 'x_offset': 2, 'y_offset': -4}   # Top
-        }
         
+        
+        self.vertical_formation_positions = {
+            'uav1': {'z': 6.0, 'radius': 2, 'angle_deg': 120},    # Bottom at 0°
+            'uav2': {'z': 3.0, 'radius': 2, 'angle_deg': 240},   # Middle at 90°
+            'uav3': {'z': 9.0, 'radius': 2, 'angle_deg': 0}   # Top at 180
+        }
+
         self.is_initialized = False
         
         # Random trajectory state
@@ -177,7 +179,7 @@ class MultiUAVCoordination:
         # Keep the Node Running
         rospy.spin()
     
-    # -----------------------End of Constructor-------------------------------------------------------------------
+    # -----------------------End of Constructor------------------------------------------------------------
     
     def initialize_grid_sectors(self):
         """Initialize grid sectors for better coverage distribution"""
@@ -405,39 +407,62 @@ class MultiUAVCoordination:
     
     # Vertical formation planning 
     def planVerticalFormationTrajectory(self, disc_world_x, disc_world_y, disc_world_z):
-        """Plan trajectory to vertical formation position around the disc coordinates"""
+        """Plan trajectory to vertical formation position around the disc coordinates, 
+        with heading facing toward the disc."""
+
         path_msg = PathSrvRequest()
         path_msg.path.header.frame_id = self.frame_id
         path_msg.path.header.stamp = rospy.Time.now()
         path_msg.path.fly_now = True
         path_msg.path.use_heading = True
         self.formation_active = True
-        
+
         # Get vertical formation position for this UAV
         formation_info = self.vertical_formation_positions[self.uav_name]
-        
-        # Calculate formation position directly above the disc with original offsets
-        formation_x = disc_world_x + formation_info['x_offset']
-        formation_y = (disc_world_y) + formation_info['y_offset']
-        formation_z = formation_info['z']  # Maintain vertical stacking
-        
+
+        # Extract radius and angle (degrees) for this UAV from formation_info
+        r = formation_info['radius']
+        angle_deg = formation_info['angle_deg']
+        angle_rad = math.radians(angle_deg)
+
+        # Calculate formation position on circle around the disc
+        formation_x = disc_world_x + r * math.cos(angle_rad)
+        formation_y = disc_world_y + r * math.sin(angle_rad)   # your offset
+        formation_z = disc_world_z   # keep same height as disc OR adjust if needed
+
+        # ----------------------------------------------------------------------
+        # Compute heading so the UAV faces the disc
+        # Heading = angle from UAV (formation pos) to disc position
+        dx = disc_world_x - formation_x
+        dy = disc_world_y - formation_y
+        desired_yaw = math.atan2(dy, dx)          # radians
+        desired_yaw_deg = math.degrees(desired_yaw)
+        # ----------------------------------------------------------------------
+
         # Create waypoint to the vertical formation position
         point = Reference()
         point.position.x = formation_x
         point.position.y = formation_y
         point.position.z = formation_z
-        point.heading = 0.0  # Face forward or maintain current heading
+        point.heading = desired_yaw           # face toward the disc
 
+        # Save confirmation coordinates
         self.formation_x_confirmed = formation_x
-        self.formation_y_confirmed = formation_y
+        self.formation_y_confirmed = formation_y - 4
         self.formation_z_confirmed = formation_z
-        
+
+        # Append to path
         path_msg.path.points.append(point)
-        
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}) above disc')
-        
+
+        rospy.loginfo(
+            f'[MultiUAVCoordination-{self.uav_name}]: '
+            f'Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}), '
+            f'heading toward disc ({desired_yaw_deg:.1f}°)'
+        )
+
         return path_msg
-    
+
+
 
 
     
