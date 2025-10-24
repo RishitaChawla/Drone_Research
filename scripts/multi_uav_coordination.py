@@ -54,9 +54,9 @@ class MultiUAVCoordination:
         
         
         self.vertical_formation_positions = {
-            'uav1': {'z': 6.0, 'radius': 2, 'angle_deg': 120},    # Bottom at 0°
-            'uav2': {'z': 3.0, 'radius': 2, 'angle_deg': 240},   # Middle at 90°
-            'uav3': {'z': 9.0, 'radius': 2, 'angle_deg': 0}   # Top at 180
+            'uav1': {'z': 6.0, 'radius': 1, 'angle_deg': 120},    # Bottom at 0°
+            'uav2': {'z': 3.0, 'radius': 1, 'angle_deg': 240},   # Middle at 90°
+            'uav3': {'z': 9.0, 'radius': 1, 'angle_deg': 0}   # Top at 180
         }
 
         self.is_initialized = False
@@ -169,6 +169,9 @@ class MultiUAVCoordination:
         self.formation_z_confirmed = 0
         self.descent_initiated = False
         self.formation_done = False
+        self.descent_done = False
+        self.y_offset = 4
+        self.offset_initiated = False  
 
         # Disc world coordinates
         self.disc_world_x = 0.0
@@ -417,6 +420,7 @@ class MultiUAVCoordination:
         path_msg.path.use_heading = True
         self.formation_active = True
 
+        disc_world_y = disc_world_y - 4
         # Get vertical formation position for this UAV
         formation_info = self.vertical_formation_positions[self.uav_name]
 
@@ -427,17 +431,17 @@ class MultiUAVCoordination:
 
         # Calculate formation position on circle around the disc
         formation_x = disc_world_x + r * math.cos(angle_rad)
-        formation_y = disc_world_y + r * math.sin(angle_rad)   # your offset
-        formation_z = disc_world_z   # keep same height as disc OR adjust if needed
+        formation_y = disc_world_y + r * math.sin(angle_rad)   
+        formation_z = (0.5 * r) + 1.52
 
         # ----------------------------------------------------------------------
         # Compute heading so the UAV faces the disc
         # Heading = angle from UAV (formation pos) to disc position
         dx = disc_world_x - formation_x
         dy = disc_world_y - formation_y
-        desired_yaw = math.atan2(dy, dx)          # radians
-        desired_yaw_deg = math.degrees(desired_yaw)
-        # ----------------------------------------------------------------------
+        desired_yaw = math.atan2(dy, dx) + math.pi       
+        desired_yaw_deg = math.degrees(desired_yaw) 
+      
 
         # Create waypoint to the vertical formation position
         point = Reference()
@@ -448,23 +452,13 @@ class MultiUAVCoordination:
 
         # Save confirmation coordinates
         self.formation_x_confirmed = formation_x
-        self.formation_y_confirmed = formation_y - 4
+        self.formation_y_confirmed = formation_y
         self.formation_z_confirmed = formation_z
 
         # Append to path
         path_msg.path.points.append(point)
 
-        rospy.loginfo(
-            f'[MultiUAVCoordination-{self.uav_name}]: '
-            f'Planning vertical formation at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f}), '
-            f'heading toward disc ({desired_yaw_deg:.1f}°)'
-        )
-
         return path_msg
-
-
-
-
     
     def detectDisc(self, image):
         """Detect gray disc with shape and size filtering to avoid detecting drones"""
@@ -645,7 +639,6 @@ class MultiUAVCoordination:
             
             rospy.loginfo(f"[{self.uav_name}] Ground intersection parameter t = {t:.3f}")
             
-            # OPTION E: 90° coordinate rotation (X becomes -Y, Y becomes +X)
             self.disc_world_x = self.current_gps_x - t * world_y
             self.disc_world_y = self.current_gps_y + t * world_x
             self.disc_world_z = 0.0  # Ground level
@@ -671,103 +664,59 @@ class MultiUAVCoordination:
             return False
 
 
-    def planDescent(self, formation_x, formation_y, formation_z):
-        """ Plan descent trajectory points """
-        path_msg = PathSrvRequest()
-        path_msg.path.header.frame_id = self.frame_id
-        path_msg.path.header.stamp = rospy.Time.now()
-        path_msg.path.fly_now = True
-        path_msg.path.use_heading = True
-        self.formation_active = True
-        
-        formation_x = self.formation_x_confirmed
-        formation_y = self.formation_y_confirmed
-        formation_z = 2.5
-        
-        point = Reference()
-        point.position.x = formation_x
-        point.position.y = formation_y
-        point.position.z = formation_z
-        
-        # Calculate the UAV's position relative to disc center
-        dx = self.current_gps_x - formation_x  # UAV position relative to disc
-        dy = self.current_gps_y - formation_y
-        
-        # Calculate which "sector" the UAV is in around the disc
-        angle_from_disc = math.atan2(dy, dx)  # UAV's position angle around disc
-        
-        # Convert to degrees for easier understanding
-        angle_degrees = math.degrees(angle_from_disc)
-        if angle_degrees < 0:
-            angle_degrees += 360
-        
-        # Assign headings based on UAV position around disc
-        if 315 <= angle_degrees or angle_degrees < 45:  
-            point.heading = math.radians(180) 
-        elif 45 <= angle_degrees < 135:  
-            point.heading = math.radians(270)  
-        elif 135 <= angle_degrees < 225:  
-            point.heading = math.radians(0)    
-        else:  # Bottom side (270°±45°)
-            point.heading = math.radians(90)   
-        
     
-
-        if self.uav_name == "uav1":
-            point.heading = math.radians(170)
-        elif self.uav_name == "uav2":
-            point.heading = math.radians(90)
-        elif self.uav_name == "uav3":
-            point.heading = math.radians(0)
-        
-        rospy.loginfo(f'[{self.uav_name}] Position angle: {angle_degrees:.1f}°')
-        rospy.loginfo(f'[{self.uav_name}] Assigned heading: {math.degrees(point.heading):.1f}°')
-        
-        path_msg.path.points.append(point)
-        
-        rospy.loginfo(f'[MultiUAVCoordination-{self.uav_name}]: Planning descent at ({formation_x:.1f}, {formation_y:.1f}, {formation_z:.1f})')
-        
-        return path_msg
     # ------------------------------callbacks-------------------------------------------
     
     def callbackUAVStatus(self, msg):
         """Update current GPS coordinates and heading from UAV status"""
         try:
             # Extract real-time position from odometry data
-            self.current_gps_x = msg.odom_x  # Current X position in meters
-            self.current_gps_y = msg.odom_y  # Current Y position in meters
-            self.current_gps_z = msg.odom_z  # Current Z position in meters
-            
-            # Extract current heading
-            self.current_heading = msg.odom_hdg  # Current heading in radians
-            
-            # Mark that we have received valid GPS data
+            self.current_gps_x = msg.odom_x
+            self.current_gps_y = msg.odom_y
+            self.current_gps_z = msg.odom_z
+            self.current_heading = msg.odom_hdg
             self.gps_data_received = True
             
-            # Optional: Log GPS updates every 2 seconds (remove this in production for less spam)
+            # Log GPS updates every 2 seconds
             if hasattr(self, '_last_log_time'):
                 current_time = rospy.Time.now()
-                if (current_time - self._last_log_time).to_sec() > 2.0:  # Log every 2 seconds
+                if (current_time - self._last_log_time).to_sec() > 2.0:
                     rospy.loginfo(f'[{self.uav_name}]: GPS Update - X:{self.current_gps_x:.2f}, Y:{self.current_gps_y:.2f}, Z:{self.current_gps_z:.2f}, Heading:{math.degrees(self.current_heading):.1f}°')
                     self._last_log_time = current_time
             else:
                 self._last_log_time = rospy.Time.now()
-
-            if(abs(self.current_gps_x - self.formation_x_confirmed) < 0.5) and (abs(self.current_gps_y - self.formation_y_confirmed) < 0.5) and (abs(self.current_gps_z - self.formation_z_confirmed) < 0.5):
-                self.formation_done = True
-                        
             
-            if(self.formation_done and not self.descent_initiated):
-                self.descent_initiated = True  # Prevent multiple executions
-                formation_path = self.planDescent(self.formation_x_confirmed, self.formation_y_confirmed, self.formation_z_confirmed)
+            # Check if formation position reached
+            if (abs(self.current_gps_x - self.formation_x_confirmed) < 0.5 and 
+                abs(self.current_gps_y - self.formation_y_confirmed) < 0.5 and 
+                abs(self.current_gps_z - self.formation_z_confirmed) < 0.5):
+                if not self.formation_done:  # Only log once
+                    rospy.loginfo(f"{self.uav_name}: Formation position reached!")
+                self.formation_done = True
+            
+            # Execute descent once formation is complete
+            if self.formation_done and not self.descent_initiated:
+                self.descent_initiated = True
+                rospy.loginfo(f"{self.uav_name}: ===== STARTING DESCENT =====")
+                formation_path = self.planDescent(self.formation_x_confirmed, 
+                                                self.formation_y_confirmed, 
+                                                self.formation_z_confirmed)
                 response = self.sc_path.call(formation_path)
-                rospy.loginfo(f"{self.uav_name}: Descent coordinates sent to the topic")
-
-                
-
+                rospy.loginfo(f"{self.uav_name}: Descent coordinates sent")
+            
+            # Check if descent is complete (reached Z=2.5) - THIS WAS MISSING!
+            if self.descent_initiated and not self.descent_done:
+                target_descent_z = 2.5
+                if abs(self.current_gps_z - target_descent_z) < 0.6:  # Within 30cm
+                    self.descent_done = True  
+                    rospy.loginfo(f"{self.uav_name}: ===== DESCENT COMPLETE at Z={self.current_gps_z:.2f}m =====")
+            
+            
+                    
         except Exception as e:
             rospy.logerr(f'[{self.uav_name}]: Error processing UAV status: {e}')
-    
+                    
+
     def callbackStart(self, req):
         """Start the trajectory based on trajectory_type parameter"""
         if not self.is_initialized:
